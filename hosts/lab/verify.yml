@@ -1,0 +1,42 @@
+---
+- name: Verify lab end state
+  hosts: lab
+  gather_facts: true
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - name: Record that this play actually executed
+      ansible.builtin.set_fact:
+        verify_ran: true
+      tags: [always]
+
+    - name: Host is the expected Ubuntu release
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Ubuntu'
+          - ansible_distribution_version is version('26.04', '>=')
+          - ansible_lsb.codename == 'resolute'
+        fail_msg: >-
+          Expected Ubuntu 26.04 (resolute), got
+          {{ ansible_distribution }} {{ ansible_distribution_version }}
+      tags: [always]
+
+# ansible-playbook exits 0 when a play matches no hosts. For a verification
+# playbook that is the worst possible default: a typo in the inventory or the
+# host pattern turns every assertion below into a silent pass. This play runs
+# on localhost, always, and fails if the lab play did not actually execute.
+- name: Guard against a silently empty verify run
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  tasks:
+    - name: The lab play must have run
+      ansible.builtin.assert:
+        that:
+          - "'lab' in hostvars"
+          - hostvars['lab'].verify_ran | default(false) | bool
+        fail_msg: >-
+          verify.yml matched no hosts, or the lab play did not run. Nothing was
+          verified. Check the inventory path and the host pattern.
+      tags: [always]

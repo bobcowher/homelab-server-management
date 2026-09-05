@@ -1,0 +1,58 @@
+---
+wan_interface: enp5s0
+data_root: /data
+
+lab_users:
+  - name: robertcowher
+    shell: /bin/bash
+    groups: [ml, docker, sudo]
+  - name: beekeeper
+    shell: /bin/bash
+    groups: [ml]
+  - name: llm
+    shell: /usr/sbin/nologin
+    groups: [ml, docker]
+  - name: files
+    shell: /usr/sbin/nologin
+    groups: []
+
+nvidia_driver_branch: 595-server
+
+conda_prefix: /opt/conda
+conda_envs:
+  # beekeeper: the service environment. setup.sh finds python3.12 here.
+  - name: beekeeper
+    python: "3.12"
+  # py312: general-purpose 3.12 for interactive work. Read-only like every
+  # shared env; to install into it, clone it first:
+  #   conda create -n mywork --clone py312
+  # which lands in ~/.conda/envs and is writable.
+  - name: py312
+    python: "3.12"
+
+tools_apt:
+  - htop
+  - nvtop
+  - iotop
+  - ncdu
+  - tree
+  - ripgrep
+  - fd-find
+  - pciutils
+  - sysstat
+  - tmux
+  - jq
+  - unzip
+  - nvme-cli
+  - smartmontools
+
+tools_pipx:
+  - nvitop
+
+llama_swap_version: "253"
+llama_swap_sha256: 91f4d0af56cd5471d0133d6f89db7a7db118a9cd6f8ecd2bbdffd50aa29e5eb6
+
+# deploy.sh resets the checkout to origin/develop, so Ansible clones the same
+# branch to avoid the two fighting. Change here if that ever moves to main.
+beekeeper_branch: develop
+beekeeper_home: /home/beekeeper/beekeeper

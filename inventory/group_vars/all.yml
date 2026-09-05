@@ -1,0 +1,17 @@
+---
+# Fleet invariants. The test for what belongs here: if a second lab server
+# would have to agree on it, it is fleet-wide.
+#
+# These numeric IDs are load-bearing. /data ownership survives a rebuild only
+# because they never change, and a restore onto a host where they differ
+# silently produces wrong ownership. Do not edit without a migration plan.
+
+ml_gid: 3000
+
+user_uids:
+  robertcowher: 1000
+  beekeeper: 2001
+  llm: 2002
+  files: 2003
+
+lan_subnet: 192.168.1.0/24

@@ -78,7 +78,10 @@ ansible-lint hosts/lab/main.yml
 ansible.cfg                     # inventory path, become defaults, ssh pipelining
 requirements.yml                # collection pins
 inventory/hosts.yml             # every host
-group_vars/all.yml              # fleet invariants ONLY: uid/gid map, lan_subnet
+inventory/group_vars/all.yml    # fleet invariants ONLY: uid/gid map, lan_subnet
+                                # MUST live beside the inventory: a repo-root
+                                # group_vars/ is NOT loaded for a playbook at
+                                # hosts/lab/, and every UID silently vanishes
 hosts/lab/main.yml              # this host's playbook: its roles, in order, tagged
 hosts/lab/vars.yml              # host specifics: driver branch, versions, tool lists
 hosts/lab/verify.yml            # host-specific end-state assertions, tagged per role
@@ -195,7 +198,13 @@ all:
       ansible_user: robertcowher
 ```
 
-- [ ] **Step 6: Write `group_vars/all.yml` — fleet invariants only**
+- [ ] **Step 6: Write `inventory/group_vars/all.yml` — fleet invariants only**
+
+Path matters. Ansible auto-loads `group_vars/` from beside the *inventory
+file* or beside the *playbook*. This playbook lives at `hosts/lab/main.yml`,
+so a repo-root `group_vars/` is loaded by neither — `ml_gid` and `user_uids`
+come back undefined with no error, and the users role would create accounts at
+whatever UID the system picks. Verified empirically during execution.
 
 ```yaml
 ---
@@ -316,7 +325,7 @@ Expected: no errors.
 - [ ] **Step 11: Commit**
 
 ```bash
-git add ansible.cfg requirements.yml inventory group_vars hosts
+git add ansible.cfg requirements.yml inventory hosts
 git commit -m "feat: ansible skeleton, inventory, and fleet/host variable split"
 ```
 
