@@ -54,12 +54,69 @@
           breaks every GPU container without warning (spec 3.6).
       tags: [base]
 
-    - name: Timezone is declared
+    # Ubuntu 26.04 has no /etc/timezone; systemd owns this via the
+    # /etc/localtime symlink, so ask timedatectl rather than read a file.
+    - name: Read the configured timezone
+      ansible.builtin.command: timedatectl show -p Timezone --value
+      register: tz_conf
+      changed_when: false
+      tags: [base]
+
+    - name: Timezone matches the declared value
       ansible.builtin.assert:
         that:
-          - ansible_date_time.tz == 'UTC'
-        fail_msg: "Timezone is {{ ansible_date_time.tz }}, expected UTC"
+          - tz_conf.stdout | trim == timezone
+        fail_msg: "Timezone is {{ tz_conf.stdout | trim }}, expected {{ timezone }}"
       tags: [base]
+
+    - name: Read the ml group
+      ansible.builtin.getent:
+        database: group
+        key: ml
+      tags: [users]
+
+    - name: ml group has the exact fleet GID
+      ansible.builtin.assert:
+        that:
+          - getent_group['ml'][1] | int == ml_gid
+        fail_msg: >-
+          ml GID is {{ getent_group['ml'][1] }}, expected {{ ml_gid }}.
+          A drifted GID breaks /data ownership on restore.
+      tags: [users]
+
+    - name: Read each managed user
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ item.name }}"
+      register: user_ent
+      loop: "{{ lab_users }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [users]
+
+    - name: Each user has the exact fleet UID and expected shell
+      ansible.builtin.assert:
+        that:
+          - item.ansible_facts.getent_passwd[item.item.name][1] | int
+            == user_uids[item.item.name]
+          - item.ansible_facts.getent_passwd[item.item.name][5]
+            == item.item.shell
+        fail_msg: >-
+          {{ item.item.name }} has UID
+          {{ item.ansible_facts.getent_passwd[item.item.name][1] }} /
+          shell {{ item.ansible_facts.getent_passwd[item.item.name][5] }},
+          expected {{ user_uids[item.item.name] }} / {{ item.item.shell }}
+      loop: "{{ user_ent.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+      tags: [users]
+
+    - name: The passwordless sudo drop-in parses
+      ansible.builtin.command: /usr/sbin/visudo -cf /etc/sudoers.d/robertcowher-nopasswd
+      become: true
+      register: rc_sudoers
+      changed_when: false
+      tags: [users]
 
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the

@@ -376,11 +376,19 @@ Append to the `tasks:` list in `hosts/lab/verify.yml`:
           which will break the pinned NVIDIA driver.
       tags: [base]
 
-    - name: Timezone is declared
+    # Ubuntu 26.04 has no /etc/timezone; systemd owns this via the
+    # /etc/localtime symlink, so ask timedatectl rather than read a file.
+    - name: Read the configured timezone
+      ansible.builtin.command: timedatectl show -p Timezone --value
+      register: tz_conf
+      changed_when: false
+      tags: [base]
+
+    - name: Timezone matches the declared value
       ansible.builtin.assert:
         that:
-          - ansible_date_time.tz == 'UTC'
-        fail_msg: "Timezone is {{ ansible_date_time.tz }}, expected UTC"
+          - tz_conf.stdout | trim == timezone
+        fail_msg: "Timezone is {{ tz_conf.stdout | trim }}, expected {{ timezone }}"
       tags: [base]
 ```
 
@@ -395,9 +403,7 @@ Expected: FAIL — `restic` and `unattended-upgrades` are not installed, and the
 ---
 - name: Set timezone
   community.general.timezone:
-    # Declaring what the host already is (UTC), so a rebuild reproduces it.
-    # Do not impose a different zone; that is a change nobody asked for.
-    name: UTC
+    name: "{{ timezone }}"
 
 - name: Update apt cache
   ansible.builtin.apt:

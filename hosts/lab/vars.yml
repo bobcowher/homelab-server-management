@@ -2,6 +2,9 @@
 wan_interface: enp5s0
 data_root: /data
 
+# Central. Host shipped as UTC; this is a deliberate change.
+timezone: America/Chicago
+
 lab_users:
   - name: robertcowher
     shell: /bin/bash

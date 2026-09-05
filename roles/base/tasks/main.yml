@@ -1,10 +1,7 @@
 ---
 - name: Set timezone
   community.general.timezone:
-    # Declaring what the host already is, so a rebuild reproduces it. Servers
-    # stay on UTC; log correlation across machines is worth more than local
-    # time in a terminal.
-    name: UTC
+    name: "{{ timezone }}"
 
 - name: Update apt cache
   ansible.builtin.apt:
