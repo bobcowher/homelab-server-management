@@ -21,8 +21,13 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:3000:8080"
+    # host-gateway resolves to the Docker bridge gateway, so this survives the
+    # host changing IP. Baking ansible_default_ipv4 in here would pin the
+    # running container to whatever address it had at render time.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      - OPENAI_API_BASE_URL=http://{{ ansible_default_ipv4.address }}:8080/v1
+      - OPENAI_API_BASE_URL=http://host.docker.internal:8080/v1
       - OPENAI_API_KEY=none
       - WEBUI_AUTH=true
     volumes:

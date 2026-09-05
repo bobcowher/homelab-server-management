@@ -573,7 +573,9 @@
           - sockets.stdout is not search('0.0.0.0:8081')
           - sockets.stdout is not search('0.0.0.0:9100')
           - sockets.stdout is not search('0.0.0.0:9400')
-          - sockets.stdout is not search(ansible_host | regex_escape ~ ':3000')
+          - >-
+            sockets.stdout is not
+            search(ansible_default_ipv4.address | regex_escape ~ ':3000')
         fail_msg: >-
           A containerized service is bound to a LAN address. ufw cannot filter
           Docker published ports, so this is reachable from the LAN despite
@@ -596,6 +598,62 @@
           - wcontainers.stdout is not search('unhealthy')
         fail_msg: "webstack containers: {{ wcontainers.stdout }}"
       tags: [webstack]
+
+    - name: beekeeper service state
+      ansible.builtin.systemd_service:
+        name: beekeeper
+      become: true
+      register: bksvc
+      changed_when: false
+      tags: [beekeeper]
+
+    - name: beekeeper is active and enabled
+      ansible.builtin.assert:
+        that:
+          - bksvc.status.ActiveState == 'active'
+          - bksvc.status.UnitFileState == 'enabled'
+        fail_msg: "beekeeper is {{ bksvc.status.ActiveState }}"
+      tags: [beekeeper]
+
+    - name: The API answers on the port its consumers expect
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:5000/api/v1/busy"
+        return_content: true
+      register: busy
+      tags: [beekeeper]
+
+    - name: The busy endpoint returns valid JSON
+      ansible.builtin.assert:
+        that:
+          - busy.json is defined
+        fail_msg: >-
+          /api/v1/busy did not return JSON. deploy.sh polls this endpoint
+          before restarting, and the MCP config and generated agent SDKs both
+          bake in this address (spec 3.2).
+      tags: [beekeeper]
+
+    - name: The service venv uses the conda 3.12 interpreter
+      ansible.builtin.command: "{{ beekeeper_home }}/venv/bin/python --version"
+      become: true
+      become_user: beekeeper
+      register: bkpy
+      changed_when: false
+      tags: [beekeeper]
+
+    - name: beekeeper is not running on Python 3.13 or newer
+      ansible.builtin.assert:
+        that:
+          - "'3.12' in bkpy.stdout"
+        fail_msg: >-
+          venv reports {{ bkpy.stdout }}. numpy<2.0 has no wheels above 3.12.
+      tags: [beekeeper]
+
+    - name: The sudoers drop-in parses
+      ansible.builtin.command: /usr/sbin/visudo -cf /etc/sudoers.d/beekeeper
+      become: true
+      register: bksudo
+      changed_when: false
+      tags: [beekeeper]
 
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the

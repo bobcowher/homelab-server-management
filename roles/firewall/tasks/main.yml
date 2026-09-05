@@ -23,6 +23,17 @@
     - "8080"   # llama-swap
     - "5000"   # beekeeper
 
+# Containers reaching llama-swap on the host arrive with a Docker bridge
+# source address, not a LAN one, so the lan_subnet rule above does not cover
+# them and default-deny drops the traffic. Open WebUI talks to llama-swap over
+# exactly this path.
+- name: Allow containers to reach llama-swap on the host
+  community.general.ufw:
+    rule: allow
+    port: "8080"
+    proto: tcp
+    src: "{{ docker_bridge_subnet }}"
+
 - name: Default deny incoming
   community.general.ufw:
     direction: incoming

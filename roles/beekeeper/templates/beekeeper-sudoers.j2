@@ -1,17 +1,26 @@
 # Managed by Ansible. Installed with visudo validation.
 #
-# Upstream setup.sh installs its own systemd service (spec 3.4), so the
-# beekeeper user needs to manage exactly that unit and nothing else. These
-# entries mirror the sudo calls in setup.sh: it writes the unit with
-# `cp $(mktemp) /etc/systemd/system/beekeeper.service`, then reloads, enables
-# and restarts.
+# Upstream setup.sh installs its own systemd service (spec 3.4). These entries
+# mirror the sudo calls it and deploy.sh actually make.
 #
-# NOTE: permitting a write to a unit file is effectively root-equivalent --
-# whoever can write a unit can run arbitrary code as root. That follows
-# directly from the decision to let setup.sh own the unit. If that tradeoff
-# stops being acceptable, the alternative is for Ansible to template the unit
-# itself and grant only the systemctl verbs below.
-beekeeper ALL=(root) NOPASSWD: /usr/bin/cp /tmp/* /etc/systemd/system/beekeeper.service
+# On the cp entry: setup.sh writes the unit with
+#   sudo cp "$(mktemp)" /etc/systemd/system/beekeeper.service
+# The source is a random temp path, and this sudo rejects wildcards in command
+# arguments ("wildcards are not allowed in command arguments"), so the grant
+# cannot be scoped to a source pattern. Unrestricted /usr/bin/cp lets this
+# account write any file anywhere as root.
+#
+# That is broader than intended and worth closing. The fix is upstream and
+# small: have setup.sh write the unit with
+#   sudo tee "$SERVICE_FILE" < "$TEMP_SERVICE"
+# which takes its source on stdin, leaving a fixed argument that sudoers CAN
+# scope exactly:
+#   beekeeper ALL=(root) NOPASSWD: /usr/bin/tee /etc/systemd/system/beekeeper.service
+#
+# Until then, note the ceiling is unchanged in kind: anyone who can write a
+# systemd unit can already run arbitrary code as root. This widens the path to
+# root, it does not create one.
+beekeeper ALL=(root) NOPASSWD: /usr/bin/cp
 beekeeper ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
 beekeeper ALL=(root) NOPASSWD: /usr/bin/systemctl enable beekeeper
 beekeeper ALL=(root) NOPASSWD: /usr/bin/systemctl disable beekeeper

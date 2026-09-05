@@ -2,6 +2,10 @@
 wan_interface: enp5s0
 data_root: /data
 
+# Docker bridge networks. Containers reaching a native service on the host
+# arrive from here, not from lan_subnet, so they need their own firewall rule.
+docker_bridge_subnet: 172.16.0.0/12
+
 # Central. Host shipped as UTC; this is a deliberate change.
 timezone: America/Chicago
 
