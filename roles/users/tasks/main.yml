@@ -1,0 +1,40 @@
+---
+- name: Create the ml group at its fixed GID
+  ansible.builtin.group:
+    name: ml
+    gid: "{{ ml_gid }}"
+    state: present
+
+- name: Create managed users at their fixed UIDs
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    uid: "{{ user_uids[item.name] }}"
+    shell: "{{ item.shell }}"
+    create_home: true
+    # 'docker' is filtered out here because the docker role creates that group
+    # and runs later. Requesting it now fails with "group docker does not
+    # exist"; the docker role adds the membership back.
+    groups: "{{ item.groups | difference(['docker']) }}"
+    # Without append, a re-run strips any group added by hand -- a silent way
+    # to lose access.
+    append: true
+    state: present
+  loop: "{{ lab_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Grant robertcowher passwordless sudo
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/robertcowher-nopasswd
+    owner: root
+    group: root
+    mode: "0440"
+    content: "robertcowher ALL=(ALL) NOPASSWD: ALL\n"
+    # Managed here so a rebuild reproduces it rather than depending on someone
+    # having run a command by hand. Smaller grant than it appears: robertcowher
+    # is in the docker group, already root-equivalent with no password via
+    # `docker run -v /:/host`.
+    #
+    # validate is mandatory. A parse error under /etc/sudoers.d breaks sudo for
+    # every user, and this playbook has no other route to root.
+    validate: /usr/sbin/visudo -cf %s
