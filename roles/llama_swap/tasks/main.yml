@@ -7,7 +7,16 @@
     group: ml
     mode: "0755"
 
+- name: Check whether llama-swap is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/llama-swap
+  register: llama_swap_installed
+
+# Gated on the installed binary, not just `creates:` on the unarchive. The
+# tarball lands in /tmp, which is cleared on reboot, so a creates-only guard
+# leaves get_url re-fetching 22MB and reporting changed after every restart.
 - name: Download the pinned llama-swap release
+  when: not llama_swap_installed.stat.exists
   ansible.builtin.get_url:
     url: >-
       https://github.com/mostlygeek/llama-swap/releases/download/v{{ llama_swap_version }}/llama-swap_{{ llama_swap_version }}_linux_amd64.tar.gz
@@ -16,6 +25,7 @@
     mode: "0644"
 
 - name: Unpack llama-swap
+  when: not llama_swap_installed.stat.exists
   ansible.builtin.unarchive:
     src: "/tmp/llama-swap_{{ llama_swap_version }}.tar.gz"
     dest: /usr/local/bin
