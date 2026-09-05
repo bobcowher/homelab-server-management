@@ -1,0 +1,82 @@
+# Managed by Ansible.
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    # The ONLY container published to the LAN. Reachability is enforced by the
+    # DOCKER-USER rules from the firewall role, because ufw cannot filter
+    # Docker published ports.
+    ports:
+      - "80:80"
+    volumes:
+      - /etc/docker/compose/webstack/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - open-webui
+      - filebrowser
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:8080"
+    environment:
+      - OPENAI_API_BASE_URL=http://{{ ansible_default_ipv4.address }}:8080/v1
+      - OPENAI_API_KEY=none
+      - WEBUI_AUTH=true
+    volumes:
+      - {{ data_root }}/open-webui:/app/backend/data
+    # The image's own healthcheck pipes /health into
+    # `jq -ne 'input.status == true'`, which errors with "break" on the jq
+    # build shipped in this image, so the container is permanently marked
+    # unhealthy while serving 200. /health genuinely returns {"status":true};
+    # this checks that directly. Remove once upstream fixes theirs.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  filebrowser:
+    image: filebrowser/filebrowser:s6
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:80"
+    environment:
+      # Subpath hosting: File Browser, unlike beekeeper, supports it.
+      - FB_BASEURL=/files
+      # Runs as the 'files' user so files on disk carry correct ownership.
+      - PUID={{ user_uids['files'] }}
+      - PGID={{ ml_gid }}
+    volumes:
+      - {{ data_root }}:/srv
+      - {{ data_root }}/filebrowser/database:/database
+      - {{ data_root }}/filebrowser/config:/config
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    restart: unless-stopped
+    # Host network so the metrics describe the host rather than a namespace.
+    # The listen address keeps it off every LAN address regardless.
+    network_mode: host
+    pid: host
+    command:
+      - "--path.rootfs=/host"
+      - "--web.listen-address=127.0.0.1:9100"
+    volumes:
+      - /:/host:ro,rslave
+
+  dcgm-exporter:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.5-3.4.1-ubuntu22.04
+    restart: unless-stopped
+    runtime: nvidia
+    ports:
+      - "127.0.0.1:9400:9400"
+    cap_add:
+      - SYS_ADMIN
+
+volumes:
+  caddy_data:
+  caddy_config:

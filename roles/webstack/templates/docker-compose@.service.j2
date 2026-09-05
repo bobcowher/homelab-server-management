@@ -1,0 +1,17 @@
+[Unit]
+Description=Docker Compose project %i
+Requires=docker.service
+# Starting containers before the firewall rules are in place leaves a window
+# where published ports are open to the LAN.
+After=docker.service docker-user-rules.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/etc/docker/compose/%i
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

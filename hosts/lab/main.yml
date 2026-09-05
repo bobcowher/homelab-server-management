@@ -16,3 +16,4 @@
     - { role: conda, tags: [conda] }
     - { role: tools, tags: [tools] }
     - { role: llama_swap, tags: [llama_swap] }
+    - { role: webstack, tags: [webstack] }

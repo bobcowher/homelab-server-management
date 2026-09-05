@@ -511,6 +511,92 @@
       changed_when: false
       tags: [llama_swap]
 
+    - name: Compose unit state
+      ansible.builtin.systemd_service:
+        name: docker-compose@webstack
+      become: true
+      register: wsvc
+      changed_when: false
+      tags: [webstack]
+
+    - name: The webstack compose project is active and enabled
+      ansible.builtin.assert:
+        that:
+          - wsvc.status.ActiveState == 'active'
+          - wsvc.status.UnitFileState == 'enabled'
+        fail_msg: "docker-compose@webstack is {{ wsvc.status.ActiveState }}"
+      tags: [webstack]
+
+    - name: Caddy serves Open WebUI at the root
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}/"
+        status_code: [200, 302, 401]
+        follow_redirects: none
+      tags: [webstack]
+
+    - name: Caddy serves File Browser under /files
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}/files/"
+        status_code: [200, 302, 401]
+        follow_redirects: none
+      tags: [webstack]
+
+    - name: /beekeeper/ redirects rather than proxying
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}/beekeeper/"
+        status_code: [301, 302]
+        follow_redirects: none
+      register: bkredir
+      tags: [webstack]
+
+    - name: The beekeeper redirect points at port 5000
+      ansible.builtin.assert:
+        that:
+          - "':5000' in bkredir.location"
+        fail_msg: >-
+          /beekeeper must redirect to :5000, not proxy. Beekeeper has no
+          subpath support and its escaped paths would silently match Open
+          WebUI's routes (spec 3.2).
+      tags: [webstack]
+
+    - name: Enumerate listening TCP sockets
+      ansible.builtin.command: ss -ltnH
+      become: true
+      register: sockets
+      changed_when: false
+      tags: [webstack]
+
+    - name: No containerized service listens on a LAN address
+      ansible.builtin.assert:
+        that:
+          - sockets.stdout is not search('0.0.0.0:3000')
+          - sockets.stdout is not search('0.0.0.0:8081')
+          - sockets.stdout is not search('0.0.0.0:9100')
+          - sockets.stdout is not search('0.0.0.0:9400')
+          - sockets.stdout is not search(ansible_host | regex_escape ~ ':3000')
+        fail_msg: >-
+          A containerized service is bound to a LAN address. ufw cannot filter
+          Docker published ports, so this is reachable from the LAN despite
+          default-deny (spec 3.1).
+      tags: [webstack]
+
+    - name: All webstack containers are running and none are unhealthy
+      ansible.builtin.command: >-
+        docker ps --filter label=com.docker.compose.project=webstack
+        --format {{ '{{.Names}}:{{.Status}}' }}
+      become: true
+      register: wcontainers
+      changed_when: false
+      tags: [webstack]
+
+    - name: Five containers up, no unhealthy ones
+      ansible.builtin.assert:
+        that:
+          - wcontainers.stdout_lines | length == 5
+          - wcontainers.stdout is not search('unhealthy')
+        fail_msg: "webstack containers: {{ wcontainers.stdout }}"
+      tags: [webstack]
+
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
 # host pattern turns every assertion below into a silent pass. This play runs

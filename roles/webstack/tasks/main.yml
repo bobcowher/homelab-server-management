@@ -1,0 +1,55 @@
+---
+- name: Create the compose project directory
+  ansible.builtin.file:
+    path: /etc/docker/compose/webstack
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create service state directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ user_uids['files'] }}"
+    group: ml
+    mode: "2775"
+  loop:
+    - "{{ data_root }}/open-webui"
+    - "{{ data_root }}/filebrowser"
+    - "{{ data_root }}/filebrowser/database"
+    - "{{ data_root }}/filebrowser/config"
+
+- name: Write the Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: /etc/docker/compose/webstack/Caddyfile
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart webstack
+
+- name: Write the compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /etc/docker/compose/webstack/docker-compose.yml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart webstack
+
+- name: Install the templated compose unit
+  ansible.builtin.template:
+    src: docker-compose@.service.j2
+    dest: /etc/systemd/system/docker-compose@.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart webstack
+
+- name: Enable and start the webstack project
+  ansible.builtin.systemd_service:
+    name: docker-compose@webstack
+    enabled: true
+    state: started
+    daemon_reload: true

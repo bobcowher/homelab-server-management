@@ -1,0 +1,25 @@
+# Managed by Ansible.
+:80 {
+	# Upstreams are addressed by compose SERVICE NAME, not 127.0.0.1. Caddy
+	# runs in a container, so loopback is the Caddy container itself and
+	# proxying to 127.0.0.1 fails with connection refused. The 127.0.0.1
+	# publications in the compose file exist for host-side debugging and to
+	# keep these services off any LAN address.
+
+	handle_path /files/* {
+		reverse_proxy filebrowser:80
+	}
+
+	# Beekeeper is NOT proxied. It has no ProxyFix, APPLICATION_ROOT, or
+	# SCRIPT_NAME handling, and its templates hardcode absolute paths like
+	# /admin and /api/v1/docs. Proxied under a subpath it would break, and
+	# break silently INTO Open WebUI, whose routes match the escaped paths.
+	redir /beekeeper /beekeeper/
+	handle /beekeeper/* {
+		redir http://lab.local:5000/ 302
+	}
+
+	handle {
+		reverse_proxy open-webui:8080
+	}
+}
