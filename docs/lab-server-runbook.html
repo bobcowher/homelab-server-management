@@ -174,9 +174,9 @@ footer{border-top:1px solid var(--rule);margin-top:24px;padding:24px 0 56px;
 <header class="masthead">
   <p class="kicker">Operations Runbook</p>
   <h1>Lab Server Runbook</h1>
-  <p class="standfirst">How to run, change, and repair <code>lab</code> — the two-GPU inference and training box at 192.168.1.30 — and how to add new models to it.</p>
+  <p class="standfirst">How to run, change, and repair <code>lab</code> — the two-GPU inference and training box on the workshop LAN — and how to add new models to it.</p>
   <div class="facts">
-    <span><b>Host</b> lab.local / 192.168.1.30</span>
+    <span><b>Host</b> lab.local <span style="color:var(--ink-faint)">(DHCP — never pin the IP)</span></span>
     <span><b>OS</b> Ubuntu 26.04.1 (resolute)</span>
     <span><b>GPUs</b> RTX 3060 12GB + RTX 3090 24GB</span>
     <span><b>Disk</b> 1.8T root</span>
@@ -235,6 +235,7 @@ ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags webstack</co
   <div class="tw"><table>
     <thead><tr><th>Path</th><th>Holds</th><th>Edit when</th></tr></thead>
     <tbody>
+      <tr><td class="m name">inventory/hosts.yml</td><td>How to reach the host — addressed as <code>lab.local</code>, not an IP</td><td>Adding a second machine</td></tr>
       <tr><td class="m name">inventory/group_vars/all.yml</td><td>Fleet invariants: the UID/GID map, LAN subnet</td><td>Almost never — see the warning below</td></tr>
       <tr><td class="m name">hosts/lab/vars.yml</td><td>Everything host-specific: driver branch, pinned versions, tool lists, conda envs, timezone</td><td>Most changes start here</td></tr>
       <tr><td class="m name">hosts/lab/main.yml</td><td>Which roles this host runs, in order</td><td>Adding or removing a role</td></tr>
@@ -245,6 +246,10 @@ ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags webstack</co
   <div class="note caution">
     <span class="lbl">Don't drift the numeric IDs</span>
     <p><code>ml=3000</code>, <code>robertcowher=1000</code>, <code>beekeeper=2001</code>, <code>llm=2002</code>, <code>files=2003</code>. These are pinned so <code>/data</code> ownership survives a rebuild. Restoring <code>/data</code> onto a host where they differ silently produces wrong ownership, and nothing will tell you until something can't read its own files. They live in exactly one file for that reason.</p>
+  </div>
+  <div class="note caution">
+    <span class="lbl">The LAN is DHCP — never pin an IP</span>
+    <p>Addresses change on lease renewal. The inventory addresses the host as <code>lab.local</code>, which avahi keeps pointed at the right machine. A literal IP fails in the worst way: plays simply fail to connect, and every URL assertion in <code>verify.yml</code> would end up testing whatever machine later took that address. <code>lan_subnet</code> is the one address-shaped constant, and a subnet is stable where a host address is not.</p>
   </div>
   <div class="note caution">
     <span class="lbl">group_vars must sit beside the inventory</span>
@@ -273,8 +278,8 @@ ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags webstack</co
   <h3>Why Caddy exists</h3>
   <p><strong>ufw cannot filter Docker published ports.</strong> Docker writes into the <code>nat</code> PREROUTING and FORWARD chains, which are evaluated before ufw's INPUT rules — a container published with <code>-p 3000:3000</code> is reachable from the LAN even under default-deny. So containers bind loopback, Caddy is the one container exposed, and container traffic is filtered in the <code>DOCKER-USER</code> chain instead.</p>
   <p>Caddy is a security control here, not a convenience. To confirm it's working, run this <strong>from another machine</strong> — from lab itself it proves nothing:</p>
-  <pre><code>curl -m5 http://192.168.1.30/        <span class="c"># 200 — Caddy answers</span>
-curl -m5 http://192.168.1.30:3000/   <span class="c"># must fail to connect</span></code></pre>
+  <pre><code>curl -m5 http://lab.local/        <span class="c"># 200 — Caddy answers</span>
+curl -m5 http://lab.local:3000/   <span class="c"># must fail to connect</span></code></pre>
 
   <h3>Beekeeper is the deliberate exception</h3>
   <p>It sits directly on <code>:5000</code> rather than behind a Caddy subpath. It has no <code>ProxyFix</code>, <code>SCRIPT_NAME</code>, or <code>APPLICATION_ROOT</code> handling and its templates hardcode absolute paths like <code>/admin</code>. Proxied under a subpath it would break — and break <em>silently into Open WebUI</em>, whose routes match the escaped paths. <code>lab.local/beekeeper</code> is a 302 to port 5000, not a proxy.</p>
@@ -326,7 +331,11 @@ scp mymodel-q4_k_m.gguf robertcowher@lab.local:/data/models/</code></pre>
 <span class="c"># config is valid: 1 model(s), 0 peer(s)</span></code></pre>
 
   <h3>Using it from the web UI</h3>
-  <p>Open WebUI at <code>http://lab.local/</code> is already pointed at llama-swap's OpenAI-compatible endpoint (<code>OPENAI_API_BASE_URL=http://192.168.1.30:8080/v1</code>, set in the compose file). New models appear in its model dropdown once llama-swap knows about them — no Open WebUI change needed. If one doesn't show up, refresh its model list from <em>Settings → Connections</em>.</p>
+  <p>Open WebUI at <code>http://lab.local/</code> is already pointed at llama-swap's OpenAI-compatible endpoint (<code>OPENAI_API_BASE_URL=http://host.docker.internal:8080/v1</code>, set in the compose file). New models appear in its model dropdown once llama-swap knows about them — no Open WebUI change needed. If one doesn't show up, refresh its model list from <em>Settings → Connections</em>.</p>
+  <div class="note caution">
+    <span class="lbl">Container → host traffic needs its own firewall rule</span>
+    <p>Open WebUI reaches llama-swap over the Docker bridge, so its packets arrive from <code>172.16.0.0/12</code>, <em>not</em> from the LAN subnet. The <code>lan_subnet</code> ufw rule does not cover them and default-deny drops the traffic — the symptom is an empty model dropdown, not an error. There is a separate ufw rule for the bridge range. If you add another native service that containers must reach, it needs the same treatment.</p>
+  </div>
 
   <h3>Using it from a harness or agent</h3>
   <p>llama-swap speaks the OpenAI API, so anything that accepts a custom base URL works. There is no API key — it's LAN-only and unauthenticated, so pass any non-empty placeholder where a client demands one.</p>
@@ -498,10 +507,10 @@ ssh robertcowher@lab.local 'sudo nvitop -1'</code></pre>
       </div>
     </li>
     <li>
-      <span class="sev med">Blocked</span>
+      <span class="sev med">Widened</span>
       <div>
-        <p class="t">Beekeeper is not deployed</p>
-        <p>The role is written and ready but not wired into <code>hosts/lab/main.yml</code>. Upstream <code>setup.sh</code> derives <code>python3.12-venv</code> from the interpreter it finds and tries to <code>apt install</code> it; that package doesn't exist on Ubuntu 26.04, and <code>set -euo pipefail</code> aborts the script. A fix sits on the <code>fix/venv-capability-check</code> branch of the beekeeper repo — it tests whether the interpreter can build a venv instead of checking for a Debian package. Push it to <code>develop</code>, add the role, and apply.</p>
+        <p class="t">Beekeeper's sudo grant is broader than intended</p>
+        <p>Beekeeper is deployed and running. But <code>setup.sh</code> installs its unit with <code>sudo cp "$(mktemp)" …</code>, and this <code>sudo</code> rejects wildcards in command arguments, so the grant could not be scoped to a source path — it is an unrestricted <code>/usr/bin/cp</code>. The ceiling is unchanged in kind (anyone who can write a systemd unit can already run code as root) but the path is wider than it should be. The fix is upstream and small: have <code>setup.sh</code> write the unit with <code>sudo tee "$SERVICE_FILE" &lt; "$TEMP_SERVICE"</code>, which leaves a fixed argument sudoers can name exactly.</p>
       </div>
     </li>
     <li>
@@ -529,7 +538,7 @@ ssh robertcowher@lab.local 'sudo nvitop -1'</code></pre>
 </section>
 
 <footer>
-  Generated from docs/superpowers/specs/2026-09-04-lab-server-ansible-design.md &nbsp;·&nbsp; verified against lab 2026-09-05 &nbsp;·&nbsp; 12 of 13 roles applied
+  Generated from docs/superpowers/specs/2026-09-04-lab-server-ansible-design.md &nbsp;·&nbsp; verified against lab 2026-09-05 &nbsp;·&nbsp; all 13 roles applied, ok=138 changed=0
 </footer>
 
 </main>
