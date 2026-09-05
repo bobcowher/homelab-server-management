@@ -85,9 +85,12 @@ available from apt.
 Python 3.9–3.12 only — no wheels for 3.13+, and no viable source build against
 the newer C API. `bash setup.sh` fails at pip install.
 
-Consequence: conda provides Python 3.12 (section 5.7). `bcrypt==4.1.2` and
-`tbparse==0.0.8` carry the same wheel-availability risk and should be checked
-during implementation.
+Consequence: conda supplies the 3.12 interpreter (section 5.7). Conda is not a
+workaround adopted for this constraint — it is existing, heavily used
+infrastructure that beekeeper's runtime and Robert's own projects both depend
+on. This constraint only fixes the version of one environment. `bcrypt==4.1.2`
+and `tbparse==0.0.8` carry the same wheel-availability risk and should be
+checked during implementation.
 
 ### 3.4 Upstream `setup.sh` owns the systemd unit
 
@@ -135,7 +138,8 @@ Routing is path-based on the single host `lab.local`.
 | Beekeeper deploy | Ansible preps host, runs upstream `setup.sh` idempotently | Upstream stays the source of truth for the unit |
 | Beekeeper user | UID 2001, `/bin/bash`, home `/home/beekeeper` | nologin fights `setup.sh`, venv builds, and repo clones |
 | `llm`, `files` users | Remain nologin | Only ever exec'd by systemd or docker; no execution path needs a shell |
-| Python | Miniforge at `/opt/conda`, env `beekeeper` at 3.12 | Only clean route to a supported interpreter; conda-forge channel avoids the Anaconda ToS question and is smaller |
+| Python | Miniforge at `/opt/conda`, shared, with profile.d init; env `beekeeper` at 3.12 | Conda is load-bearing for beekeeper's runtime and for interactive project work, so it is installed for humans as well as services. conda-forge avoids the Anaconda ToS question and is smaller |
+| Claude Code | Native installer, per-user for `robertcowher` | Self-updating, so Ansible ensures presence rather than pinning. The npm route would drag in a global node toolchain the host has no other use for |
 | Hostnames | `lab.local`, HTTP only | Explicitly good enough for now; Caddy cannot issue certs for `.local` anyway |
 | llama-swap | Pin `v253`, checksum-verified | Latest release as of this date |
 
@@ -200,9 +204,25 @@ One `DOCKER-USER` rule permitting `80` to the Caddy container. `9100`/`9400`
 never leave loopback because they are never published.
 
 ### 5.7 `conda`
-Miniforge at `/opt/conda`, group-readable by `ml`. Environment `beekeeper` at
-Python 3.12, which supplies the `python3.12` binary that `setup.sh` searches
-for.
+Conda is core infrastructure on this host, not a dependency workaround.
+Beekeeper's runtime uses it and interactive project work under `robertcowher`
+expects it, so it is installed for humans as well as for services.
+
+Miniforge at `/opt/conda`, root-owned, group `ml`, read and execute for the
+group — **not** group-writable. A writable shared prefix would let any `ml`
+member mutate the `beekeeper` environment a running service depends on. Shared
+environments are declared in `group_vars/all.yml` and created by Ansible;
+personal environments land in `~/.conda/envs` automatically, because conda
+falls back to the first writable path in `envs_dirs`.
+
+Shell initialization goes in `/etc/profile.d/conda.sh` rather than each user's
+`.bashrc`, so `conda activate` works in a login shell for every `ml` member and
+there is one place to change it. `auto_activate_base` is off — a `base` env
+silently prepended to every shell's `PATH` is how the wrong `python` ends up
+running a service.
+
+Environment `beekeeper` at Python 3.12 supplies the `python3.12` binary that
+`setup.sh` searches for.
 
 ### 5.8 `tools`
 Two lists in `group_vars/all.yml` so adding a tool is a one-line change, never
@@ -224,6 +244,14 @@ server, or merely annoy the operator?
 
 Operational note: nvitop must run as root to attribute GPU processes to users.
 Unprivileged, it masks processes belonging to `beekeeper` and `llm`.
+
+`tmux` is in `tools_apt` above.
+
+Claude Code installs for `robertcowher` only — via the native installer to
+`~/.local/bin`, run as that user, never as root. It self-updates, so Ansible's
+job is to ensure it exists, not to pin a version: the task is guarded on the
+binary's absence and does not re-run. Installing it system-wide or as root
+would fight its own updater and put credentials under the wrong home.
 
 ### 5.9 `llama_swap`
 `v253` tarball, checksum-verified, to `/usr/local/bin`. Config at
@@ -301,6 +329,9 @@ reporting. `changed=0` proves the tasks ran, not that the host is correct.
   nothing containerized is listening on a LAN address
 - `nvidia-smi` succeeds on the host **and** inside `--gpus all`
 - `nvitop -1` returns cleanly (exercises driver, NVML, and Python bindings)
+- `conda --version` resolves in a login shell for an `ml` member, and
+  `/opt/conda/envs/beekeeper/bin/python --version` reports 3.12
+- `claude --version` succeeds as `robertcowher`
 - HTTP probe through Caddy reaches Open WebUI and File Browser
 - `curl http://192.168.1.30:5000/api/v1/busy` returns valid JSON
 
