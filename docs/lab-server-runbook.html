@@ -1,0 +1,537 @@
+<title>Lab Server Runbook</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#f6f7f8; --surface:#ffffff; --surface-2:#eef1f3; --sunken:#e7ebee;
+  --ink:#151b21; --ink-soft:#495865; --ink-faint:#75858f;
+  --rule:#d8dfe4; --rule-soft:#e6ebef;
+  --accent:#0e7c86; --accent-soft:#d3ecee; --accent-ink:#07555c;
+  --ok:#2f7d55; --ok-soft:#dcefe3;
+  --warn:#9a6410; --warn-soft:#f7ead3;
+  --crit:#b03a30; --crit-soft:#f8dedb;
+  --code-bg:#11181d; --code-ink:#dbe4ea; --code-dim:#7d919e;
+  --measure:68ch;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+  --ground:#0d1117; --surface:#141b22; --surface-2:#1a232b; --sunken:#0a0f14;
+  --ink:#e7eef3; --ink-soft:#a3b3bf; --ink-faint:#768895;
+  --rule:#25313a; --rule-soft:#1c262e;
+  --accent:#3fc7d4; --accent-soft:#10333a; --accent-ink:#7fdde7;
+  --ok:#57c98a; --ok-soft:#13301f;
+  --warn:#e0a548; --warn-soft:#33260e;
+  --crit:#f0776a; --crit-soft:#3a1a17;
+  --code-bg:#080d11; --code-ink:#d3dee6; --code-dim:#6c7f8c;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0d1117; --surface:#141b22; --surface-2:#1a232b; --sunken:#0a0f14;
+  --ink:#e7eef3; --ink-soft:#a3b3bf; --ink-faint:#768895;
+  --rule:#25313a; --rule-soft:#1c262e;
+  --accent:#3fc7d4; --accent-soft:#10333a; --accent-ink:#7fdde7;
+  --ok:#57c98a; --ok-soft:#13301f;
+  --warn:#e0a548; --warn-soft:#33260e;
+  --crit:#f0776a; --crit-soft:#3a1a17;
+  --code-bg:#080d11; --code-ink:#d3dee6; --code-dim:#6c7f8c;
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--ground); color:var(--ink);
+  font-family:"IBM Plex Sans","Helvetica Neue",Arial,sans-serif;
+  font-size:16px; line-height:1.5; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+
+/* ---- masthead ---- */
+.masthead{border-bottom:1px solid var(--rule);padding:56px 0 28px;margin-bottom:40px}
+.kicker{
+  font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--accent);margin:0 0 14px;font-weight:600;
+}
+h1{
+  font-size:clamp(32px,5vw,46px);line-height:1.08;margin:0 0 16px;
+  font-weight:600;letter-spacing:-.02em;text-wrap:balance;
+}
+.standfirst{
+  font-family:"IBM Plex Serif",Georgia,serif;font-size:18px;line-height:1.6;
+  color:var(--ink-soft);max-width:var(--measure);margin:0;
+}
+.facts{
+  display:flex;flex-wrap:wrap;gap:8px 28px;margin-top:24px;
+  font-family:"IBM Plex Mono",monospace;font-size:12.5px;color:var(--ink-faint);
+}
+.facts b{color:var(--ink-soft);font-weight:500}
+
+/* ---- layout ---- */
+.cols{display:grid;grid-template-columns:200px minmax(0,1fr);gap:56px;align-items:start}
+@media (max-width:900px){.cols{grid-template-columns:1fr;gap:32px}}
+nav.rail{position:sticky;top:24px}
+@media (max-width:900px){
+  nav.rail{position:static;border:1px solid var(--rule);border-radius:6px;padding:16px;background:var(--surface)}
+}
+nav.rail h2{
+  font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-faint);margin:0 0 12px;font-weight:600;
+}
+nav.rail ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+@media (max-width:900px){nav.rail ol{flex-direction:row;flex-wrap:wrap;gap:6px 16px}}
+nav.rail a{
+  display:block;padding:5px 0;color:var(--ink-soft);text-decoration:none;
+  font-size:13.5px;border-left:2px solid transparent;padding-left:10px;margin-left:-12px;
+}
+nav.rail a:hover{color:var(--accent);border-left-color:var(--accent)}
+nav.rail a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+@media (max-width:900px){nav.rail a{border-left:0;padding-left:0;margin-left:0}}
+
+main{min-width:0}
+section{margin-bottom:64px;scroll-margin-top:24px}
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace;font-size:11.5px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-faint);margin:0 0 6px;font-weight:500;
+}
+h2{font-size:26px;font-weight:600;letter-spacing:-.015em;margin:0 0 18px;text-wrap:balance}
+h3{font-size:17px;font-weight:600;margin:32px 0 10px;letter-spacing:-.005em}
+h4{font-size:14px;font-weight:600;margin:22px 0 8px;color:var(--ink-soft)}
+p{font-family:"IBM Plex Serif",Georgia,serif;font-size:15.5px;line-height:1.66;max-width:var(--measure);margin:0 0 14px;color:var(--ink-soft)}
+p strong{color:var(--ink);font-weight:600}
+main ul,main ol.steps{max-width:var(--measure);padding-left:20px;margin:0 0 16px}
+main li{font-family:"IBM Plex Serif",Georgia,serif;font-size:15.5px;line-height:1.6;color:var(--ink-soft);margin-bottom:7px}
+code{font-family:"IBM Plex Mono",monospace;font-size:.875em;background:var(--surface-2);padding:1.5px 5px;border-radius:3px;color:var(--ink)}
+a{color:var(--accent)}
+
+/* ---- code blocks ---- */
+pre{
+  background:var(--code-bg);color:var(--code-ink);border-radius:6px;
+  padding:16px 18px;overflow-x:auto;margin:0 0 18px;
+  font-family:"IBM Plex Mono",monospace;font-size:13px;line-height:1.6;
+  border:1px solid var(--rule);
+}
+pre code{background:none;padding:0;color:inherit;font-size:inherit}
+pre .c{color:var(--code-dim)}
+pre .p{color:#5fd3de}
+
+/* ---- tables ---- */
+.tw{overflow-x:auto;margin:0 0 18px;border:1px solid var(--rule);border-radius:6px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:520px}
+th{
+  text-align:left;font-family:"IBM Plex Mono",monospace;font-size:11px;
+  letter-spacing:.09em;text-transform:uppercase;color:var(--ink-faint);
+  font-weight:600;padding:11px 14px;border-bottom:1px solid var(--rule);background:var(--surface-2);
+}
+td{padding:10px 14px;border-bottom:1px solid var(--rule-soft);vertical-align:top;color:var(--ink-soft)}
+tr:last-child td{border-bottom:0}
+td.m,th.m{font-family:"IBM Plex Mono",monospace;font-size:12.5px;font-variant-numeric:tabular-nums}
+td.name{color:var(--ink);font-weight:500}
+
+/* ---- pills ---- */
+.pill{
+  display:inline-block;font-family:"IBM Plex Mono",monospace;font-size:10.5px;
+  letter-spacing:.06em;text-transform:uppercase;font-weight:600;
+  padding:2.5px 7px;border-radius:3px;white-space:nowrap;
+}
+.pill.lan{background:var(--warn-soft);color:var(--warn)}
+.pill.local{background:var(--ok-soft);color:var(--ok)}
+
+/* ---- callouts ---- */
+.note{
+  border-left:3px solid var(--accent);background:var(--accent-soft);
+  padding:14px 18px;border-radius:0 5px 5px 0;margin:0 0 18px;max-width:var(--measure);
+}
+.note.danger{border-left-color:var(--crit);background:var(--crit-soft)}
+.note.caution{border-left-color:var(--warn);background:var(--warn-soft)}
+.note p{margin:0;font-size:14.5px;color:var(--ink)}
+.note p+p{margin-top:9px}
+.note .lbl{
+  font-family:"IBM Plex Sans",sans-serif;font-size:11px;letter-spacing:.1em;
+  text-transform:uppercase;font-weight:700;display:block;margin-bottom:5px;
+}
+.note .lbl{color:var(--accent-ink)}
+.note.danger .lbl{color:var(--crit)}
+.note.caution .lbl{color:var(--warn)}
+
+/* ---- gap list ---- */
+.gaps{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:14px;max-width:var(--measure)}
+.gaps li{
+  display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start;
+  padding:14px 16px;background:var(--surface);border:1px solid var(--rule);border-radius:6px;margin:0;
+}
+.gaps .sev{
+  font-family:"IBM Plex Mono",monospace;font-size:10.5px;font-weight:600;
+  letter-spacing:.06em;text-transform:uppercase;padding:3px 7px;border-radius:3px;margin-top:2px;
+}
+.gaps .sev.high{background:var(--crit-soft);color:var(--crit)}
+.gaps .sev.med{background:var(--warn-soft);color:var(--warn)}
+.gaps p{margin:0;font-size:14.5px}
+.gaps p.t{font-family:"IBM Plex Sans",sans-serif;font-weight:600;color:var(--ink);margin-bottom:4px}
+
+footer{border-top:1px solid var(--rule);margin-top:24px;padding:24px 0 56px;
+  font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--ink-faint)}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+<header class="masthead">
+  <p class="kicker">Operations Runbook</p>
+  <h1>Lab Server Runbook</h1>
+  <p class="standfirst">How to run, change, and repair <code>lab</code> — the two-GPU inference and training box at 192.168.1.30 — and how to add new models to it.</p>
+  <div class="facts">
+    <span><b>Host</b> lab.local / 192.168.1.30</span>
+    <span><b>OS</b> Ubuntu 26.04.1 (resolute)</span>
+    <span><b>GPUs</b> RTX 3060 12GB + RTX 3090 24GB</span>
+    <span><b>Disk</b> 1.8T root</span>
+    <span><b>Repo</b> ansibleprojects/lab_server</span>
+  </div>
+</header>
+
+<div class="cols">
+<nav class="rail">
+  <h2>Sections</h2>
+  <ol>
+    <li><a href="#daily">Everyday commands</a></li>
+    <li><a href="#repo">Where to change what</a></li>
+    <li><a href="#services">What runs where</a></li>
+    <li><a href="#models">Adding a model</a></li>
+    <li><a href="#routine">Routine changes</a></li>
+    <li><a href="#maintain">Upgrades &amp; holds</a></li>
+    <li><a href="#trouble">When it breaks</a></li>
+    <li><a href="#danger">Handle with care</a></li>
+    <li><a href="#gaps">Known gaps</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<section id="daily">
+  <p class="eyebrow">hosts/lab</p>
+  <h2>Everyday commands</h2>
+  <p>Run everything from the repo root. Sudo on <code>lab</code> is passwordless for <code>robertcowher</code>, so no <code>--ask-become-pass</code>.</p>
+
+  <h3>Apply the whole configuration</h3>
+  <pre><code>ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml</code></pre>
+  <p>Applies every role, then automatically runs the full verification. A healthy run ends <code>changed=0</code> with no failures. Anything reporting <code>changed</code> on a second consecutive run is a bug — a role doing work it already did.</p>
+
+  <h3>Check health without changing anything</h3>
+  <pre><code>ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml</code></pre>
+  <p>This is the "is everything actually up?" test. It reads the machine back and asserts roughly 70 facts: service states, listening sockets, GPU visibility inside a container, firewall rule ordering, file ownership, the beekeeper redirect. It changes nothing, so it is safe to run any time.</p>
+  <div class="note">
+    <span class="lbl">Why two playbooks</span>
+    <p><code>changed=0</code> proves Ansible didn't redo work. It does <em>not</em> prove the host is correct. The verify playbook never trusts Ansible's own reporting — it queries the machine. That distinction caught four real bugs during the build that a green apply had hidden.</p>
+  </div>
+
+  <h3>Work on one role only</h3>
+  <pre><code>ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags webstack
+ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags webstack</code></pre>
+  <p>Every role is tagged with its own name: <code>base users storage nvidia docker firewall conda tools llama_swap webstack</code>.</p>
+
+  <h3>Check syntax without touching the host</h3>
+  <pre><code>ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --syntax-check</code></pre>
+</section>
+
+<section id="repo">
+  <p class="eyebrow">repository layout</p>
+  <h2>Where to change what</h2>
+  <p>Roles are a shared library at the top level; <code>hosts/lab/</code> composes them for this one machine. When a second lab server arrives it gets its own <code>hosts/&lt;name&gt;/</code> directory and picks the roles it wants — a box with AMD GPUs gets a new <code>amd_gpu</code> role <em>instead of</em> <code>nvidia</code>, rather than a vendor branch inside it.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Path</th><th>Holds</th><th>Edit when</th></tr></thead>
+    <tbody>
+      <tr><td class="m name">inventory/group_vars/all.yml</td><td>Fleet invariants: the UID/GID map, LAN subnet</td><td>Almost never — see the warning below</td></tr>
+      <tr><td class="m name">hosts/lab/vars.yml</td><td>Everything host-specific: driver branch, pinned versions, tool lists, conda envs, timezone</td><td>Most changes start here</td></tr>
+      <tr><td class="m name">hosts/lab/main.yml</td><td>Which roles this host runs, in order</td><td>Adding or removing a role</td></tr>
+      <tr><td class="m name">hosts/lab/verify.yml</td><td>End-state assertions, tagged per role</td><td>Adding a new thing worth checking</td></tr>
+      <tr><td class="m name">roles/&lt;name&gt;/</td><td>Reusable logic, no host specifics</td><td>Changing <em>how</em> something is done</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note caution">
+    <span class="lbl">Don't drift the numeric IDs</span>
+    <p><code>ml=3000</code>, <code>robertcowher=1000</code>, <code>beekeeper=2001</code>, <code>llm=2002</code>, <code>files=2003</code>. These are pinned so <code>/data</code> ownership survives a rebuild. Restoring <code>/data</code> onto a host where they differ silently produces wrong ownership, and nothing will tell you until something can't read its own files. They live in exactly one file for that reason.</p>
+  </div>
+  <div class="note caution">
+    <span class="lbl">group_vars must sit beside the inventory</span>
+    <p>A repo-root <code>group_vars/</code> is <strong>not</strong> loaded — Ansible looks beside the inventory file or beside the playbook, and <code>hosts/lab/main.yml</code> is neither. Move it and every UID silently becomes undefined, with no error.</p>
+  </div>
+</section>
+
+<section id="services">
+  <p class="eyebrow">bind policy</p>
+  <h2>What runs where</h2>
+  <p>Only four things are reachable from the LAN. Everything containerized binds loopback and is reached through Caddy.</p>
+  <div class="tw"><table>
+    <thead><tr><th>Service</th><th class="m">Bind</th><th>Reach it at</th><th>Managed by</th></tr></thead>
+    <tbody>
+      <tr><td class="name">SSH</td><td class="m"><span class="pill lan">LAN</span> :22</td><td class="m">ssh robertcowher@lab.local</td><td class="m">system</td></tr>
+      <tr><td class="name">Caddy</td><td class="m"><span class="pill lan">LAN</span> :80</td><td class="m">http://lab.local/</td><td class="m">webstack</td></tr>
+      <tr><td class="name">llama-swap</td><td class="m"><span class="pill lan">LAN</span> :8080</td><td class="m">http://lab.local:8080/</td><td class="m">llama-swap.service</td></tr>
+      <tr><td class="name">Beekeeper</td><td class="m"><span class="pill lan">LAN</span> :5000</td><td class="m">http://lab.local:5000/</td><td class="m">beekeeper.service</td></tr>
+      <tr><td class="name">Open WebUI</td><td class="m"><span class="pill local">local</span> 127.0.0.1:3000</td><td class="m">http://lab.local/</td><td class="m">webstack</td></tr>
+      <tr><td class="name">File Browser</td><td class="m"><span class="pill local">local</span> 127.0.0.1:8081</td><td class="m">http://lab.local/files/</td><td class="m">webstack</td></tr>
+      <tr><td class="name">node-exporter</td><td class="m"><span class="pill local">local</span> 127.0.0.1:9100</td><td class="m">local scrape only</td><td class="m">webstack</td></tr>
+      <tr><td class="name">DCGM exporter</td><td class="m"><span class="pill local">local</span> 127.0.0.1:9400</td><td class="m">local scrape only</td><td class="m">webstack</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Why Caddy exists</h3>
+  <p><strong>ufw cannot filter Docker published ports.</strong> Docker writes into the <code>nat</code> PREROUTING and FORWARD chains, which are evaluated before ufw's INPUT rules — a container published with <code>-p 3000:3000</code> is reachable from the LAN even under default-deny. So containers bind loopback, Caddy is the one container exposed, and container traffic is filtered in the <code>DOCKER-USER</code> chain instead.</p>
+  <p>Caddy is a security control here, not a convenience. To confirm it's working, run this <strong>from another machine</strong> — from lab itself it proves nothing:</p>
+  <pre><code>curl -m5 http://192.168.1.30/        <span class="c"># 200 — Caddy answers</span>
+curl -m5 http://192.168.1.30:3000/   <span class="c"># must fail to connect</span></code></pre>
+
+  <h3>Beekeeper is the deliberate exception</h3>
+  <p>It sits directly on <code>:5000</code> rather than behind a Caddy subpath. It has no <code>ProxyFix</code>, <code>SCRIPT_NAME</code>, or <code>APPLICATION_ROOT</code> handling and its templates hardcode absolute paths like <code>/admin</code>. Proxied under a subpath it would break — and break <em>silently into Open WebUI</em>, whose routes match the escaped paths. <code>lab.local/beekeeper</code> is a 302 to port 5000, not a proxy.</p>
+</section>
+
+<section id="models">
+  <p class="eyebrow">llama-swap + open webui</p>
+  <h2>Adding a model</h2>
+  <p>One place defines models: <code>roles/llama_swap/templates/config.yaml.j2</code>. llama-swap starts a backend on demand, proxies to it, and shuts it down after its TTL — so several models can be configured and only the one in use occupies VRAM.</p>
+
+  <h3>Know your GPUs before you pin</h3>
+  <div class="tw"><table>
+    <thead><tr><th class="m">Device</th><th>Card</th><th class="m">VRAM</th><th class="m">PCI</th><th>Good for</th></tr></thead>
+    <tbody>
+      <tr><td class="m name">0</td><td>RTX 3060</td><td class="m">12 GB</td><td class="m">04:00.0</td><td>7–8B at Q4, embeddings, draft models</td></tr>
+      <tr><td class="m name">1</td><td>RTX 3090</td><td class="m">24 GB</td><td class="m">0A:00.0</td><td>14B at Q4/Q5, 32B at low quant, training</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note caution">
+    <span class="lbl">Device 0 is the smaller card</span>
+    <p>The 3060 sorts first by PCI bus ID, so the default "GPU 0" is the 12GB card, not the 24GB one. The llama-swap unit sets <code>CUDA_DEVICE_ORDER=PCI_BUS_ID</code> so this ordering is at least stable and explicit — but <strong>always set <code>CUDA_VISIBLE_DEVICES</code> per model</strong> rather than relying on a default. And the cards are mismatched, so vLLM tensor parallelism cannot split one model across both.</p>
+  </div>
+
+  <h3>1. Put the weights on disk</h3>
+  <pre><code><span class="c"># /data/models is group ml with setgid — new files stay group-readable</span>
+scp mymodel-q4_k_m.gguf robertcowher@lab.local:/data/models/</code></pre>
+  <p>Or drop them in through File Browser at <code>lab.local/files/</code>, which writes as the <code>files</code> user into the same tree.</p>
+
+  <h3>2. Declare it in the config template</h3>
+  <p>Edit <code>roles/llama_swap/templates/config.yaml.j2</code>. The <code>${PORT}</code> macro is llama-swap's — it assigns a free loopback port per backend, so backends are never LAN-exposed:</p>
+  <pre><code>models:
+  <span class="p">"qwen2.5-14b"</span>:
+    cmd: &gt;
+      /usr/local/bin/llama-server
+      --model /data/models/qwen2.5-14b-instruct-q4_k_m.gguf
+      --port ${PORT}
+      --n-gpu-layers 99
+      --ctx-size 16384
+    proxy: <span class="p">"http://127.0.0.1:${PORT}"</span>
+    env:
+      - <span class="p">"CUDA_VISIBLE_DEVICES=1"</span>   <span class="c"># the 3090</span>
+    ttl: 300                        <span class="c"># unload after 5 min idle</span></code></pre>
+
+  <h3>3. Apply and confirm</h3>
+  <pre><code>ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags llama_swap</code></pre>
+  <p>The config is installed with <code>validate: llama-swap -config %s -validate</code>, so a malformed config is rejected <em>before</em> it reaches disk and the running service is never left broken. To check by hand:</p>
+  <pre><code>ssh robertcowher@lab.local \
+  '/usr/local/bin/llama-swap -config /etc/llama-swap/config.yaml -validate'
+<span class="c"># config is valid: 1 model(s), 0 peer(s)</span></code></pre>
+
+  <h3>Using it from the web UI</h3>
+  <p>Open WebUI at <code>http://lab.local/</code> is already pointed at llama-swap's OpenAI-compatible endpoint (<code>OPENAI_API_BASE_URL=http://192.168.1.30:8080/v1</code>, set in the compose file). New models appear in its model dropdown once llama-swap knows about them — no Open WebUI change needed. If one doesn't show up, refresh its model list from <em>Settings → Connections</em>.</p>
+
+  <h3>Using it from a harness or agent</h3>
+  <p>llama-swap speaks the OpenAI API, so anything that accepts a custom base URL works. There is no API key — it's LAN-only and unauthenticated, so pass any non-empty placeholder where a client demands one.</p>
+  <pre><code>export OPENAI_BASE_URL=<span class="p">"http://lab.local:8080/v1"</span>
+export OPENAI_API_KEY=<span class="p">"none"</span>
+
+<span class="c"># confirm the server lists what you expect</span>
+curl -s http://lab.local:8080/v1/models | jq '.data[].id'
+
+<span class="c"># a real completion</span>
+curl -s http://lab.local:8080/v1/chat/completions \
+  -H <span class="p">'Content-Type: application/json'</span> \
+  -d <span class="p">'{"model":"qwen2.5-14b","messages":[{"role":"user","content":"hi"}]}'</span> \
+  | jq -r '.choices[0].message.content'</code></pre>
+  <p>The first request to an unloaded model blocks while llama-swap starts the backend — that's the swap working, not a hang. <code>healthCheckTimeout</code> (currently 300s) bounds how long it will wait; raise it for large models on cold cache.</p>
+  <div class="note">
+    <span class="lbl">Keep the address stable</span>
+    <p>Prefer <code>lab.local:8080</code> over the raw IP in anything you'll keep. mDNS resolves exactly one name — <code>webui.lab.local</code> and friends will not resolve without extra avahi configuration, which is why all web routing is path-based on the single host.</p>
+  </div>
+</section>
+
+<section id="routine">
+  <p class="eyebrow">common edits</p>
+  <h2>Routine changes</h2>
+
+  <h3>Add a command-line tool</h3>
+  <p>One line in <code>hosts/lab/vars.yml</code>, never a role edit:</p>
+  <pre><code>tools_apt:  [htop, nvtop, iotop, ncdu, tree, ripgrep, ..., <span class="p">your-tool</span>]
+tools_pipx: [nvitop, <span class="p">your-python-tool</span>]</code></pre>
+  <pre><code>ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags tools</code></pre>
+  <p>Use <code>tools_pipx</code> for anything from PyPI. Ubuntu 26.04 enforces PEP 668, so a system-wide <code>pip install</code> fails outright.</p>
+
+  <h3>Add a shared conda environment</h3>
+  <pre><code>conda_envs:
+  - { name: beekeeper, python: <span class="p">"3.12"</span> }
+  - { name: py312,     python: <span class="p">"3.12"</span> }
+  - { name: <span class="p">yourenv</span>,   python: <span class="p">"3.12"</span> }</code></pre>
+  <p>Shared environments live in <code>/opt/conda/envs</code> and are <strong>read-only</strong> — deliberately, so nobody can mutate an environment a running service depends on. To install into one, clone it first; the clone lands in your home directory and is writable:</p>
+  <pre><code>conda create -n mywork --clone py312
+conda activate mywork
+pip install whatever</code></pre>
+  <p><code>base</code> does not auto-activate. That's intentional — a base environment silently prepended to every shell's <code>PATH</code> is how the wrong Python ends up running a service.</p>
+
+  <h3>Open a new port to the LAN</h3>
+  <p>For a <strong>native</strong> service, add the port to the loop in <code>roles/firewall/tasks/main.yml</code>. For a <strong>container</strong>, ufw won't help — add a rule to <code>roles/firewall/templates/docker-user-rules.sh.j2</code> above the DROP line, and publish the container on the LAN in the compose file. Prefer routing it through Caddy instead.</p>
+</section>
+
+<section id="maintain">
+  <p class="eyebrow">packages &amp; drivers</p>
+  <h2>Upgrades &amp; holds</h2>
+  <p>Sixteen packages are held: everything matching <code>nvidia*</code>, <code>libnvidia*</code>, <code>docker-ce*</code>, and <code>containerd*</code>. Unattended-upgrades is scoped to security origins only.</p>
+  <p>Both exist for the same reason. An automatic driver bump moves the userspace libraries out from under the loaded kernel module and breaks every GPU container — with no warning, until something tries to use a GPU. The distro default allowed the full release pocket, which would have done exactly that.</p>
+
+  <h4>See what's held</h4>
+  <pre><code>ssh robertcowher@lab.local 'apt-mark showhold'</code></pre>
+
+  <h4>Deliberately upgrade the driver</h4>
+  <ol class="steps">
+    <li>Check what apt intends first — <strong>if any line starts with <code>Remv</code>, stop</strong>:
+      <pre style="margin-top:8px"><code>sudo apt-get install --dry-run nvidia-utils-&lt;branch&gt; | grep -E '^(Remv|Inst)'</code></pre>
+    </li>
+    <li>Update <code>nvidia_driver_branch</code> in <code>hosts/lab/vars.yml</code>.</li>
+    <li>Unhold, upgrade, <strong>reboot</strong> — the kernel module and userspace libraries must match, and a running kernel keeps the old module until you restart.</li>
+    <li>Re-run the playbook to reapply the holds, then verify GPUs still reach containers:
+      <pre style="margin-top:8px"><code>ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags nvidia,docker</code></pre>
+    </li>
+  </ol>
+
+  <h4>Update llama-swap</h4>
+  <p>Set <code>llama_swap_version</code> and <code>llama_swap_sha256</code> in <code>hosts/lab/vars.yml</code>. Get the checksum from the release's own checksums file — the download is verified against it before install:</p>
+  <pre><code>curl -sL https://github.com/mostlygeek/llama-swap/releases/download/v&lt;N&gt;/llama-swap_&lt;N&gt;_checksums.txt \
+  | grep linux_amd64</code></pre>
+</section>
+
+<section id="trouble">
+  <p class="eyebrow">diagnostics</p>
+  <h2>When it breaks</h2>
+  <p>Start here, in this order. The verify playbook usually names the problem faster than reading logs.</p>
+  <pre><code>ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml</code></pre>
+
+  <div class="tw"><table>
+    <thead><tr><th>Symptom</th><th>Likely cause</th><th>Check</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="name">Containers can't reach the internet</td>
+        <td>The conntrack RETURN in <code>DOCKER-USER</code> is missing or ordered after the DROP. Presents as silent hangs, no error.</td>
+        <td class="m">sudo iptables -S DOCKER-USER</td>
+      </tr>
+      <tr>
+        <td class="name">A container is reachable from the LAN that shouldn't be</td>
+        <td>It's publishing to <code>0.0.0.0</code>. ufw will not save you here.</td>
+        <td class="m">ss -ltn</td>
+      </tr>
+      <tr>
+        <td class="name">Caddy returns 502</td>
+        <td>Backend still starting, or the Caddyfile points at <code>127.0.0.1</code> instead of a compose service name.</td>
+        <td class="m">sudo docker ps</td>
+      </tr>
+      <tr>
+        <td class="name">nvidia-smi works, containers see no GPU</td>
+        <td>Container toolkit or the nvidia runtime in <code>daemon.json</code>.</td>
+        <td class="m">docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi -L</td>
+      </tr>
+      <tr>
+        <td class="name">Driver/library version mismatch</td>
+        <td>Userspace packages moved without a reboot.</td>
+        <td class="m">cat /proc/driver/nvidia/version</td>
+      </tr>
+      <tr>
+        <td class="name">llama-swap won't start</td>
+        <td>Bad model config — a wrong path fails at load, not at validate.</td>
+        <td class="m">journalctl -u llama-swap -n 50</td>
+      </tr>
+      <tr>
+        <td class="name">nvitop shows no process owners</td>
+        <td>Not running as root. Unprivileged it masks processes owned by <code>beekeeper</code> and <code>llm</code>.</td>
+        <td class="m">sudo nvitop</td>
+      </tr>
+    </tbody>
+  </table></div>
+
+  <h4>Useful one-liners</h4>
+  <pre><code>ssh robertcowher@lab.local 'sudo docker ps --format "{{.Names}}: {{.Status}}"'
+ssh robertcowher@lab.local 'sudo docker compose -f /etc/docker/compose/webstack/docker-compose.yml logs --tail 50'
+ssh robertcowher@lab.local 'systemctl status llama-swap docker-compose@webstack docker-user-rules'
+ssh robertcowher@lab.local 'sudo nvitop -1'</code></pre>
+
+  <h4>Restart the web stack</h4>
+  <pre><code>ssh robertcowher@lab.local 'sudo systemctl restart docker-compose@webstack'</code></pre>
+</section>
+
+<section id="danger">
+  <p class="eyebrow">before you run it</p>
+  <h2>Handle with care</h2>
+  <p>Five operations in this repo can take the machine away from you. Each is guarded — the guards are the point, so don't remove them.</p>
+
+  <div class="note danger">
+    <span class="lbl">ufw enable</span>
+    <p>Port 22 is allowed by a task that runs <em>before</em> the enable task. Reordering them disconnects you from a headless machine permanently. If you add rules, add them above the enable.</p>
+  </div>
+  <div class="note danger">
+    <span class="lbl">Anything under /etc/sudoers.d</span>
+    <p>A parse error breaks <code>sudo</code> for <strong>every</strong> user, including yours, and the playbook has no other route to root. Every sudoers file here installs with <code>validate: /usr/sbin/visudo -cf %s</code>, which refuses to write a file that doesn't parse. Never drop that.</p>
+  </div>
+  <div class="note danger">
+    <span class="lbl">The LVM extend</span>
+    <p>Growing a mounted ext4 filesystem is routine and one-way. It has already run — root fills the volume group and <code>VFree</code> is 0, so the task is now a no-op. There are no backups, so a bad extend means a rebuild.</p>
+  </div>
+  <div class="note caution">
+    <span class="lbl">sshd_config</span>
+    <p>Installed with <code>validate: /usr/sbin/sshd -t -f %s</code>, and the handler <em>reloads</em> rather than restarts so existing sessions survive. After any change, open a genuinely new connection before you trust it — an existing multiplexed session will happily mask a broken config:</p>
+    <p><code>ssh -o ControlPath=none robertcowher@lab.local true</code></p>
+  </div>
+  <div class="note caution">
+    <span class="lbl">Driver packages</span>
+    <p>Dry-run apt before installing anything <code>nvidia-*</code>. A userspace/kernel-module mismatch breaks every GPU workload until reboot.</p>
+  </div>
+</section>
+
+<section id="gaps">
+  <p class="eyebrow">not yet done</p>
+  <h2>Known gaps</h2>
+  <ul class="gaps">
+    <li>
+      <span class="sev high">Risk</span>
+      <div>
+        <p class="t">No backups</p>
+        <p><code>restic</code> is installed and deliberately unconfigured — no repos, timers, or credentials. <code>/data</code> sits on root, on a single NVMe, with no redundancy. A disk failure loses every model, dataset, and Beekeeper's training history. The fixed UIDs mean a restore would be <em>correct</em>; there is simply nothing to restore from yet. This is the largest outstanding risk on the box.</p>
+      </div>
+    </li>
+    <li>
+      <span class="sev med">Blocked</span>
+      <div>
+        <p class="t">Beekeeper is not deployed</p>
+        <p>The role is written and ready but not wired into <code>hosts/lab/main.yml</code>. Upstream <code>setup.sh</code> derives <code>python3.12-venv</code> from the interpreter it finds and tries to <code>apt install</code> it; that package doesn't exist on Ubuntu 26.04, and <code>set -euo pipefail</code> aborts the script. A fix sits on the <code>fix/venv-capability-check</code> branch of the beekeeper repo — it tests whether the interpreter can build a venv instead of checking for a Debian package. Push it to <code>develop</code>, add the role, and apply.</p>
+      </div>
+    </li>
+    <li>
+      <span class="sev med">Latent</span>
+      <div>
+        <p class="t">Beekeeper's state lives inside its checkout</p>
+        <p><code>data/beekeeper.db</code>, <code>projects/</code>, <code>.secret_key</code> and <code>config.properties</code> all sit in the git working tree, which <code>deploy.sh</code> subjects to <code>git reset --hard</code> and <code>rm -rf venv</code>. It survives only because those paths are gitignored — a stray <code>git clean -xdf</code> destroys the training history.</p>
+      </div>
+    </li>
+    <li>
+      <span class="sev med">Mismatch</span>
+      <div>
+        <p class="t">deploy.sh targets the wrong path</p>
+        <p>It points at <code>/home/bobcowher/beekeeper</code>; this host installs to <code>/home/beekeeper/beekeeper</code>. Reconcile before relying on it.</p>
+      </div>
+    </li>
+    <li>
+      <span class="sev med">Deferred</span>
+      <div>
+        <p class="t">Tailscale, TLS, and real hostnames</p>
+        <p>Excluded from this iteration. Note that a tunnel egresses <em>from</em> the box, so it needs no inbound firewall change — the LAN-only default-deny stays correct. Real hostnames and TLS behind Caddy additionally require subpath support in Beekeeper, which belongs in that repo.</p>
+      </div>
+    </li>
+  </ul>
+</section>
+
+<footer>
+  Generated from docs/superpowers/specs/2026-09-04-lab-server-ansible-design.md &nbsp;·&nbsp; verified against lab 2026-09-05 &nbsp;·&nbsp; 12 of 13 roles applied
+</footer>
+
+</main>
+</div>
+</div>
