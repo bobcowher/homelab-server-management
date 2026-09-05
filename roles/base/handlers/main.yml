@@ -1,0 +1,7 @@
+---
+- name: Reload sshd
+  ansible.builtin.systemd_service:
+    name: ssh
+    # Reload, not restart: existing connections survive, so a config that
+    # somehow got past `sshd -t` still leaves you logged in to fix it.
+    state: reloaded

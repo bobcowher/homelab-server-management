@@ -376,11 +376,11 @@ Append to the `tasks:` list in `hosts/lab/verify.yml`:
           which will break the pinned NVIDIA driver.
       tags: [base]
 
-    - name: Timezone is set
+    - name: Timezone is declared
       ansible.builtin.assert:
         that:
-          - ansible_date_time.tz is defined
-        fail_msg: Timezone not configured
+          - ansible_date_time.tz == 'UTC'
+        fail_msg: "Timezone is {{ ansible_date_time.tz }}, expected UTC"
       tags: [base]
 ```
 
@@ -395,7 +395,9 @@ Expected: FAIL — `restic` and `unattended-upgrades` are not installed, and the
 ---
 - name: Set timezone
   community.general.timezone:
-    name: America/New_York
+    # Declaring what the host already is (UTC), so a rebuild reproduces it.
+    # Do not impose a different zone; that is a change nobody asked for.
+    name: UTC
 
 - name: Update apt cache
   ansible.builtin.apt:

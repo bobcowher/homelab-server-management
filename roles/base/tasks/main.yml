@@ -1,0 +1,75 @@
+---
+- name: Set timezone
+  community.general.timezone:
+    # Declaring what the host already is, so a rebuild reproduces it. Servers
+    # stay on UTC; log correlation across machines is worth more than local
+    # time in a terminal.
+    name: UTC
+
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - git
+      - curl
+      - ca-certificates
+      - gnupg
+      - restic
+      - unattended-upgrades
+      - python3-apt
+    state: present
+
+# restic is installed but deliberately left unconfigured. Backups are a
+# deferred decision (spec section 10). Do not add repos, timers, or
+# credentials here without being asked.
+
+- name: Scope unattended-upgrades to security origins only
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/50unattended-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      // Managed by Ansible. Security pocket only.
+      //
+      // The distro default here includes "${distro_id}:${distro_codename}",
+      // the full release pocket. Left alone it would move the NVIDIA driver
+      // out from under the container toolkit and break every GPU container
+      // without warning (spec 3.6).
+      Unattended-Upgrade::Allowed-Origins {
+          "${distro_id}:${distro_codename}-security";
+          "${distro_id}ESMApps:${distro_codename}-apps-security";
+          "${distro_id}ESM:${distro_codename}-infra-security";
+      };
+      Unattended-Upgrade::Remove-Unused-Kernel-Packages "false";
+      Unattended-Upgrade::Automatic-Reboot "false";
+
+- name: Enable unattended-upgrades periodic runs
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+
+- name: Harden sshd
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-lab.conf
+    owner: root
+    group: root
+    mode: "0644"
+    # Not optional. A typo here plus the reload handler below ends this
+    # session and every future one, on a machine reachable only over SSH.
+    validate: /usr/sbin/sshd -t -f %s
+    content: |
+      PasswordAuthentication no
+      PermitRootLogin no
+      X11Forwarding no
+  notify: Reload sshd
