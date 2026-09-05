@@ -348,6 +348,86 @@
           must be reapplied by a unit rather than set once.
       tags: [firewall]
 
+    - name: Every declared environment exists at its pinned Python version
+      ansible.builtin.command: "{{ conda_prefix }}/envs/{{ item.name }}/bin/python --version"
+      register: envpy
+      changed_when: false
+      failed_when: item.python not in envpy.stdout
+      loop: "{{ conda_envs }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [conda]
+
+    - name: Conda is initialised for login shells
+      ansible.builtin.stat:
+        path: /etc/profile.d/conda.sh
+      register: condaprofile
+      tags: [conda]
+
+    - name: Profile init exists rather than per-user bashrc edits
+      ansible.builtin.assert:
+        that:
+          - condaprofile.stat.exists
+        fail_msg: /etc/profile.d/conda.sh missing
+      tags: [conda]
+
+    - name: Inspect the conda prefix
+      ansible.builtin.stat:
+        path: "{{ conda_prefix }}"
+      register: condaprefix
+      tags: [conda]
+
+    - name: The shared prefix is group ml and NOT group-writable
+      ansible.builtin.assert:
+        that:
+          - condaprefix.stat.gid | int == ml_gid
+          - condaprefix.stat.mode == '0755'
+        fail_msg: >-
+          {{ conda_prefix }} is mode {{ condaprefix.stat.mode }} gid
+          {{ condaprefix.stat.gid }}. A group-writable prefix lets any ml
+          member mutate the environment a running service depends on
+          (spec 5.7).
+      tags: [conda]
+
+    - name: conda resolves in a login shell
+      ansible.builtin.shell: bash -lc 'conda --version'
+      register: condalogin
+      changed_when: false
+      tags: [conda]
+
+    - name: base is not auto-activated
+      ansible.builtin.shell: bash -lc 'echo "${CONDA_DEFAULT_ENV:-none}"'
+      register: condabase
+      changed_when: false
+      tags: [conda]
+
+    - name: A base env is not silently prepended to every shell PATH
+      ansible.builtin.assert:
+        that:
+          - condabase.stdout | trim == 'none'
+        fail_msg: >-
+          base is auto-activated ({{ condabase.stdout | trim }}). That is how
+          the wrong python ends up running a service.
+      tags: [conda]
+
+    - name: robertcowher has a writable envs directory
+      ansible.builtin.shell: bash -lc 'conda config --show envs_dirs'
+      become: true
+      become_user: robertcowher
+      register: envdirs
+      changed_when: false
+      tags: [conda]
+
+    - name: Personal environments resolve to a writable path
+      ansible.builtin.assert:
+        that:
+          - envdirs.stdout is search('/home/robertcowher/.conda/envs')
+        fail_msg: >-
+          envs_dirs is {{ envdirs.stdout }}. The shared prefix is read-only by
+          design, so conda must fall back to ~/.conda/envs for personal
+          environments.
+      tags: [conda]
+
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
 # host pattern turns every assertion below into a silent pass. This play runs

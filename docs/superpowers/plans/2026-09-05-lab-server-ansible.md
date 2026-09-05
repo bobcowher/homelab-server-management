@@ -1646,11 +1646,21 @@ unset __conda_setup
     mode: "0755"
     recurse: false
 
+# Guarding this on the existence of .condarc does not work: the Miniforge
+# installer writes that file itself for channel config, so the guard is
+# already satisfied and the command never runs. Read the actual setting
+# instead. Note the key is `auto_activate`; `auto_activate_base` is the old
+# name and current conda does not read it.
+- name: Read the current auto-activate setting
+  ansible.builtin.command: "{{ conda_prefix }}/bin/conda config --system --show auto_activate"
+  register: conda_autoactivate_state
+  changed_when: false
+  failed_when: false
+
 - name: Disable auto-activation of the base environment
   ansible.builtin.command:
-    cmd: "{{ conda_prefix }}/bin/conda config --system --set auto_activate_base false"
-  register: conda_autoactivate
-  changed_when: "'set' in conda_autoactivate.stdout or conda_autoactivate.rc == 0"
+    cmd: "{{ conda_prefix }}/bin/conda config --system --set auto_activate false"
+  when: "'auto_activate: False' not in conda_autoactivate_state.stdout"
   # A base env silently prepended to every shell's PATH is how the wrong
   # python ends up running a service.
 
@@ -1673,9 +1683,11 @@ unset __conda_setup
     mode: "0644"
 ```
 
-The `changed_when` on the config task is imprecise; if it reports `changed` on
-every run, replace it with a `conda config --system --show auto_activate_base`
-check and a `when:` guard.
+Two traps here, both hit during execution. Do not guard this on the existence
+of `.condarc` — the Miniforge installer writes that file for channel config, so
+the guard is satisfied before the command ever runs. And the key is
+`auto_activate`; `auto_activate_base` is the old name, and setting it silently
+does nothing on current conda.
 
 - [ ] **Step 5: Add to the playbook, after `firewall`**
 

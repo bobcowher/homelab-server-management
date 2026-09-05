@@ -1,0 +1,65 @@
+---
+# Conda is core infrastructure on this host, not a dependency workaround.
+# Beekeeper's runtime uses it and interactive project work expects it, so it
+# is installed for humans as well as for services.
+- name: Download the Miniforge installer
+  ansible.builtin.get_url:
+    url: >-
+      https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
+    dest: /tmp/miniforge.sh
+    mode: "0755"
+  # conda-forge rather than Anaconda: smaller, and it sidesteps the Anaconda
+  # commercial ToS question entirely (spec 4).
+
+- name: Install Miniforge
+  ansible.builtin.command:
+    cmd: "/tmp/miniforge.sh -b -p {{ conda_prefix }}"
+    creates: "{{ conda_prefix }}/bin/conda"
+
+- name: Set ownership on the conda prefix
+  ansible.builtin.file:
+    path: "{{ conda_prefix }}"
+    state: directory
+    owner: root
+    group: ml
+    # 0755: readable and executable by ml, writable only by root. A writable
+    # shared prefix would let any ml member mutate the environment a running
+    # service depends on. Personal environments land in ~/.conda/envs, because
+    # conda falls back to the first writable path in envs_dirs.
+    mode: "0755"
+
+# Guarding this on the existence of .condarc does not work: the Miniforge
+# installer writes that file itself for channel config, so the guard is
+# already satisfied and the command never runs. Read the actual setting
+# instead. Note the key is `auto_activate`; `auto_activate_base` is the old
+# name and current conda does not read it.
+- name: Read the current auto-activate setting
+  ansible.builtin.command: "{{ conda_prefix }}/bin/conda config --system --show auto_activate"
+  register: conda_autoactivate_state
+  changed_when: false
+  failed_when: false
+
+- name: Disable auto-activation of the base environment
+  ansible.builtin.command:
+    cmd: "{{ conda_prefix }}/bin/conda config --system --set auto_activate false"
+  when: "'auto_activate: False' not in conda_autoactivate_state.stdout"
+  # A base env silently prepended to every shell's PATH is how the wrong
+  # python ends up running a service.
+
+- name: Create the declared environments
+  ansible.builtin.command:
+    cmd: >-
+      {{ conda_prefix }}/bin/conda create -y
+      -n {{ item.name }} python={{ item.python }}
+    creates: "{{ conda_prefix }}/envs/{{ item.name }}/bin/python"
+  loop: "{{ conda_envs }}"
+  loop_control:
+    label: "{{ item.name }} (python {{ item.python }})"
+
+- name: Initialise conda for login shells
+  ansible.builtin.template:
+    src: conda.sh.j2
+    dest: /etc/profile.d/conda.sh
+    owner: root
+    group: root
+    mode: "0644"

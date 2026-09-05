@@ -1,0 +1,13 @@
+# Managed by Ansible. Conda initialisation for all login shells.
+#
+# This lives here rather than in each user's .bashrc so there is one place to
+# change it and every ml member gets identical behaviour.
+__conda_setup="$('{{ conda_prefix }}/bin/conda' shell.bash hook 2>/dev/null)"
+if [ $? -eq 0 ]; then
+    eval "$__conda_setup"
+elif [ -f "{{ conda_prefix }}/etc/profile.d/conda.sh" ]; then
+    . "{{ conda_prefix }}/etc/profile.d/conda.sh"
+else
+    export PATH="{{ conda_prefix }}/bin:$PATH"
+fi
+unset __conda_setup

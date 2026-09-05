@@ -13,3 +13,4 @@
     - { role: nvidia, tags: [nvidia] }
     - { role: docker, tags: [docker] }
     - { role: firewall, tags: [firewall] }
+    - { role: conda, tags: [conda] }
