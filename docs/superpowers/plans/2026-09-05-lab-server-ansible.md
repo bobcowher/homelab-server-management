@@ -32,7 +32,7 @@ Every task's requirements implicitly include this section.
 
 Complete before Task 1. These are not tasks; they gate the whole plan.
 
-- [ ] **The server must be powered on.** It was shut down at the end of the design session. Confirm with `ping -c1 lab.local`.
+- [x] **Server is up and every premise re-validated against it (2026-09-05).** Release, kernel, interface, absent packages, and the LVM layout all match section 2 of the spec. Confirmed unprivileged: `nvme0n1p3` is 1,997,122,043,904 bytes against a 107,374,182,400 byte LV, so ~1.72TiB is still unallocated and Task 4's premise holds.
 - [ ] Install `ansible-lint` (not currently present): `pipx install ansible-lint` or `sudo apt install ansible-lint`.
 - [ ] Confirm SSH key auth still works: `ssh robertcowher@lab.local true`.
 - [ ] Have the sudo password to hand for `--ask-become-pass`.
