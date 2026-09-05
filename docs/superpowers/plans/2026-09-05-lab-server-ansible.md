@@ -350,7 +350,10 @@ Append to the `tasks:` list in `hosts/lab/verify.yml`:
       ansible.builtin.command: dpkg-query -W -f='${Status}' {{ item }}
       register: base_pkg
       changed_when: false
-      failed_when: "'install ok installed' not in base_pkg.stdout"
+      # 'hold ok installed' also means installed; the nvidia role's apt-holds
+      # change dpkg's first status field, so match only the parts that mean
+      # the package is present.
+      failed_when: "'ok installed' not in base_pkg.stdout"
       loop:
         - build-essential
         - git
@@ -877,7 +880,10 @@ Append to `hosts/lab/verify.yml`:
       ansible.builtin.command: dpkg-query -W -f='${Status}' nvidia-container-toolkit
       register: nct
       changed_when: false
-      failed_when: "'install ok installed' not in nct.stdout"
+      # 'hold ok installed' also means installed; the nvidia role's apt-holds
+      # change dpkg's first status field, so match only the parts that mean
+      # the package is present.
+      failed_when: "'ok installed' not in nct.stdout"
       tags: [nvidia]
 
     - name: Driver packages are held
@@ -1719,7 +1725,10 @@ Append to `hosts/lab/verify.yml`:
       ansible.builtin.command: dpkg-query -W -f='${Status}' {{ item }}
       register: tool_pkg
       changed_when: false
-      failed_when: "'install ok installed' not in tool_pkg.stdout"
+      # 'hold ok installed' also means installed; the nvidia role's apt-holds
+      # change dpkg's first status field, so match only the parts that mean
+      # the package is present.
+      failed_when: "'ok installed' not in tool_pkg.stdout"
       loop: "{{ tools_apt }}"
       tags: [tools]
 

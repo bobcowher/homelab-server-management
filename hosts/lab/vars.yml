@@ -21,6 +21,11 @@ lab_users:
 
 nvidia_driver_branch: 595-server
 
+# Packages held against automatic upgrades. An unattended driver bump moves
+# the userspace libraries out from under the loaded kernel module and breaks
+# every GPU container until reboot.
+apt_hold_pattern: '^(nvidia|libnvidia|docker-ce|containerd)'
+
 conda_prefix: /opt/conda
 conda_envs:
   # beekeeper: the service environment. setup.sh finds python3.12 here.

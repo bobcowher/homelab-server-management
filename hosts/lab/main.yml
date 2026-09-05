@@ -10,3 +10,4 @@
     - { role: base, tags: [base] }
     - { role: users, tags: [users] }
     - { role: storage, tags: [storage] }
+    - { role: nvidia, tags: [nvidia] }

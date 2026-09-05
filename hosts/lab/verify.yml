@@ -26,7 +26,7 @@
       ansible.builtin.command: dpkg-query -W -f='${Status}' {{ item }}
       register: base_pkg
       changed_when: false
-      failed_when: "'install ok installed' not in base_pkg.stdout"
+      failed_when: "'ok installed' not in base_pkg.stdout"
       loop:
         - build-essential
         - git
@@ -169,6 +169,44 @@
       loop_control:
         label: "{{ item.item }}"
       tags: [storage]
+
+    - name: nvidia-smi runs on the host
+      ansible.builtin.command: nvidia-smi --query-gpu=name,pci.bus_id --format=csv,noheader
+      register: smi
+      changed_when: false
+      tags: [nvidia]
+
+    - name: Both GPUs are visible
+      ansible.builtin.assert:
+        that:
+          - smi.stdout_lines | length == 2
+          - "'3090' in smi.stdout"
+          - "'3060' in smi.stdout"
+        fail_msg: "Expected an RTX 3090 and an RTX 3060, got: {{ smi.stdout }}"
+      tags: [nvidia]
+
+    - name: Container toolkit is installed
+      ansible.builtin.command: dpkg-query -W -f='${Status}' nvidia-container-toolkit
+      register: nct
+      changed_when: false
+      failed_when: "'ok installed' not in nct.stdout"
+      tags: [nvidia]
+
+    - name: Read apt holds
+      ansible.builtin.command: apt-mark showhold
+      register: holds
+      changed_when: false
+      tags: [nvidia]
+
+    - name: NVIDIA packages are pinned against unattended upgrades
+      ansible.builtin.assert:
+        that:
+          - holds.stdout is search('nvidia')
+        fail_msg: >-
+          No nvidia package is held. An automatic driver upgrade desyncs the
+          userspace libraries from the loaded kernel module and breaks every
+          GPU container without warning (spec 3.6).
+      tags: [nvidia]
 
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
