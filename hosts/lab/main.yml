@@ -17,3 +17,12 @@
     - { role: tools, tags: [tools] }
     - { role: llama_swap, tags: [llama_swap] }
     - { role: webstack, tags: [webstack] }
+
+# Verification runs automatically after every apply. `changed=0` proves the
+# tasks ran without redoing work; it does not prove the host is correct. These
+# assertions do that, and they are written to be independent of Ansible's own
+# change reporting -- they read the host back.
+#
+# Still runnable on its own for a health check without applying anything:
+#   ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml
+- ansible.builtin.import_playbook: verify.yml

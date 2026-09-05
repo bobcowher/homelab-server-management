@@ -2,12 +2,22 @@
 # Conda is core infrastructure on this host, not a dependency workaround.
 # Beekeeper's runtime uses it and interactive project work expects it, so it
 # is installed for humans as well as for services.
+- name: Check whether conda is already installed
+  ansible.builtin.stat:
+    path: "{{ conda_prefix }}/bin/conda"
+  register: conda_installed
+
+# Both of the next two tasks are gated on that check rather than on `creates:`
+# alone. The installer lands in /tmp, which is cleared on reboot, so a
+# creates-only guard leaves get_url re-downloading -- and reporting changed --
+# after every restart, forever.
 - name: Download the Miniforge installer
   ansible.builtin.get_url:
     url: >-
       https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh
     dest: /tmp/miniforge.sh
     mode: "0755"
+  when: not conda_installed.stat.exists
   # conda-forge rather than Anaconda: smaller, and it sidesteps the Anaconda
   # commercial ToS question entirely (spec 4).
 
@@ -15,6 +25,7 @@
   ansible.builtin.command:
     cmd: "/tmp/miniforge.sh -b -p {{ conda_prefix }}"
     creates: "{{ conda_prefix }}/bin/conda"
+  when: not conda_installed.stat.exists
 
 - name: Set ownership on the conda prefix
   ansible.builtin.file:
