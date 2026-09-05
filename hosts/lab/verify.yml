@@ -118,6 +118,58 @@
       changed_when: false
       tags: [users]
 
+    - name: Collect volume group free space
+      ansible.builtin.command: vgs --noheadings -o vg_free --units b --nosuffix ubuntu-vg
+      become: true
+      register: vg_free
+      changed_when: false
+      tags: [storage]
+
+    - name: Volume group has been fully allocated
+      ansible.builtin.assert:
+        that:
+          - vg_free.stdout | trim | int < 33554432
+        fail_msg: >-
+          ubuntu-vg still has {{ vg_free.stdout | trim | int // 1073741824 }}GB
+          unallocated; the root LV was not extended.
+      tags: [storage]
+
+    - name: Root filesystem is larger than the installer default
+      ansible.builtin.assert:
+        that:
+          - (ansible_mounts | selectattr('mount', 'eq', '/') | first).size_total
+            > 214748364800
+        fail_msg: Root filesystem is still at or below the 100GB install default.
+      tags: [storage]
+
+    - name: Collect /data directory state
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: data_dirs
+      loop:
+        - "{{ data_root }}"
+        - "{{ data_root }}/models"
+        - "{{ data_root }}/datasets"
+        - "{{ data_root }}/beekeeper"
+      tags: [storage]
+
+    - name: Data directories exist, are group ml, and are setgid
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+          - item.stat.gid | int == ml_gid
+          - item.stat.mode == '2775'
+        fail_msg: >-
+          {{ item.item }} is mode {{ item.stat.mode | default('absent') }}
+          gid {{ item.stat.gid | default('n/a') }}; expected mode 2775 gid
+          {{ ml_gid }}. Without setgid the shared tree rots as soon as two
+          users write to it.
+      loop: "{{ data_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      tags: [storage]
+
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
 # host pattern turns every assertion below into a silent pass. This play runs

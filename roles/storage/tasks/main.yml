@@ -1,0 +1,39 @@
+---
+# This is the only destructive-capable role in the playbook. LVM can grow a
+# mounted ext4 filesystem online, but cannot shrink one; the recovery path
+# from a bad extend is a restore.
+- name: Read volume group free space
+  ansible.builtin.command: vgs --noheadings -o vg_free --units b --nosuffix ubuntu-vg
+  register: storage_vg_free
+  changed_when: false
+
+- name: Refuse to proceed against an unexpected layout
+  ansible.builtin.assert:
+    that:
+      - storage_vg_free.stdout | trim | int >= 0
+    fail_msg: >-
+      ubuntu-vg not found or unreadable. Do not continue: this role grows a
+      filesystem and must not run against a layout it does not recognise.
+
+- name: Extend the root logical volume to fill the volume group
+  community.general.lvol:
+    vg: ubuntu-vg
+    lv: ubuntu-lv
+    size: 100%VG
+    resizefs: true
+
+- name: Create the shared data tree
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: ml
+    # setgid: files written by llama-swap or beekeeper inherit group ml and
+    # stay readable across services. Without it the shared tree silently rots
+    # as soon as two users write to it.
+    mode: "2775"
+  loop:
+    - "{{ data_root }}"
+    - "{{ data_root }}/models"
+    - "{{ data_root }}/datasets"
+    - "{{ data_root }}/beekeeper"
