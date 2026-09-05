@@ -17,7 +17,7 @@
 Every task's requirements implicitly include this section.
 
 - **Target host:** `lab` / `192.168.1.30`, Ubuntu 26.04.1 LTS, codename `resolute`, kernel 7.0.0-31-generic, interface `enp5s0`.
-- **Sudo requires a password.** Every run needs `--ask-become-pass`. Never add `NOPASSWD` for `robertcowher`.
+- **`robertcowher` has passwordless sudo** via `/etc/sudoers.d/robertcowher-nopasswd`, managed by the `users` role. Decided 2026-09-05: the account is already in the `docker` group, which is root-equivalent without a password, so requiring one on sudo was not an actual boundary. Runs therefore need no `--ask-become-pass`.
 - **Nothing is exposed to the internet.** All LAN rules are scoped to `192.168.1.0/24`.
 - **Numeric IDs are fixed and load-bearing:** `ml`=3000, `robertcowher`=1000, `beekeeper`=2001, `llm`=2002, `files`=2003. These live in `group_vars/all.yml` and exist in exactly one place. `/data` ownership survives a rebuild only because they never change.
 - **Pinned versions:** NVIDIA driver branch `595-server`; llama-swap `253` (sha256 `91f4d0af56cd5471d0133d6f89db7a7db118a9cd6f8ecd2bbdffd50aa29e5eb6`); conda env `beekeeper` at Python `3.12`.
@@ -35,7 +35,7 @@ Complete before Task 1. These are not tasks; they gate the whole plan.
 - [x] **Server is up and every premise re-validated against it (2026-09-05).** Release, kernel, interface, absent packages, and the LVM layout all match section 2 of the spec. Confirmed unprivileged: `nvme0n1p3` is 1,997,122,043,904 bytes against a 107,374,182,400 byte LV, so ~1.72TiB is still unallocated and Task 4's premise holds.
 - [ ] Install `ansible-lint` (not currently present): `pipx install ansible-lint` or `sudo apt install ansible-lint`.
 - [ ] Confirm SSH key auth still works: `ssh robertcowher@lab.local true`.
-- [ ] Have the sudo password to hand for `--ask-become-pass`.
+- [x] Passwordless sudo installed for `robertcowher` (2026-09-05). No `--ask-become-pass` needed.
 
 ---
 
@@ -60,10 +60,10 @@ first and live in a separate playbook.
 
 ```bash
 # apply one role
-ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags <role> --ask-become-pass
+ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags <role>
 
 # verify one role
-ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags <role> --ask-become-pass
+ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags <role>
 
 # syntax + lint, no host required
 ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --syntax-check
@@ -386,7 +386,7 @@ Append to the `tasks:` list in `hosts/lab/verify.yml`:
 
 - [ ] **Step 2: Run verify to confirm it fails**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags base --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags base`
 Expected: FAIL — `restic` and `unattended-upgrades` are not installed, and the origins are at defaults.
 
 - [ ] **Step 3: Write `roles/base/tasks/main.yml`**
@@ -488,7 +488,7 @@ In `hosts/lab/main.yml`, replace `roles: []` with:
 
 - [ ] **Step 6: Apply the role**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags base --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags base`
 Expected: several `changed` tasks, no failures.
 
 - [ ] **Step 7: Apply again to test idempotency**
@@ -498,7 +498,7 @@ Expected: `changed=0`. If `Set timezone` or either apt.conf file reports changed
 
 - [ ] **Step 8: Run verify**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags base --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags base`
 Expected: PASS.
 
 - [ ] **Step 9: Confirm SSH still works from a NEW connection**
@@ -561,6 +561,13 @@ Append to `hosts/lab/verify.yml`:
         label: "{{ item.name }}"
       tags: [users]
 
+    - name: The passwordless sudo drop-in parses
+      ansible.builtin.command: /usr/sbin/visudo -cf /etc/sudoers.d/robertcowher-nopasswd
+      become: true
+      register: rc_sudoers
+      changed_when: false
+      tags: [users]
+
     - name: Each user has the exact fleet UID and expected shell
       ansible.builtin.assert:
         that:
@@ -581,7 +588,7 @@ Append to `hosts/lab/verify.yml`:
 
 - [ ] **Step 2: Run verify to confirm it fails**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags users --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags users`
 Expected: FAIL — the `ml` group does not exist, so the getent lookup returns nothing.
 
 - [ ] **Step 3: Write `roles/users/tasks/main.yml`**
@@ -608,6 +615,22 @@ Expected: FAIL — the `ml` group does not exist, so the getent lookup returns n
   loop: "{{ lab_users }}"
   loop_control:
     label: "{{ item.name }}"
+
+- name: Grant robertcowher passwordless sudo
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/robertcowher-nopasswd
+    owner: root
+    group: root
+    mode: "0440"
+    content: "robertcowher ALL=(ALL) NOPASSWD: ALL\n"
+    # Managed here so a rebuild reproduces it rather than depending on someone
+    # having run a command by hand. Smaller grant than it appears: robertcowher
+    # is in the docker group, already root-equivalent with no password via
+    # `docker run -v /:/host`.
+    #
+    # validate is mandatory. A parse error under /etc/sudoers.d breaks sudo for
+    # every user, and this playbook has no other route to root.
+    validate: /usr/sbin/visudo -cf %s
 ```
 
 `append: true` matters: without it a re-run strips any group a human added by
@@ -623,7 +646,7 @@ hand, which is a silent way to lose access.
 
 - [ ] **Step 5: Apply**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags users --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags users`
 Expected: `changed` for the group and for `beekeeper`, `llm`, `files`. `robertcowher` already exists at UID 1000 and should report `ok` or a small change for group membership only.
 
 - [ ] **Step 6: Apply again**
@@ -716,7 +739,7 @@ Append to `hosts/lab/verify.yml`:
 
 - [ ] **Step 2: Run verify to confirm it fails**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags storage --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags storage`
 Expected: FAIL on the first assertion — roughly 1.7TB is unallocated.
 
 - [ ] **Step 3: Capture pre-state before touching anything**
@@ -776,13 +799,13 @@ second run reports `ok`.
 
 - [ ] **Step 5: Dry-run the role first**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags storage --check --diff --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags storage --check --diff`
 Expected: shows the lvol and file tasks as would-change. `--check` cannot fully
 simulate `lvol`, so treat this as a sanity read, not a guarantee.
 
 - [ ] **Step 6: Apply**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags storage --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags storage`
 Expected: `changed` on the lvol and the four directories.
 
 - [ ] **Step 7: Confirm the filesystem actually grew**
@@ -869,7 +892,7 @@ The in-container `nvidia-smi` check belongs to Task 6, because it needs Docker.
 
 - [ ] **Step 2: Run verify to confirm it fails**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags nvidia --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags nvidia`
 Expected: FAIL — `nvidia-smi` is not installed.
 
 - [ ] **Step 3: Check what apt intends to do BEFORE installing**
@@ -971,7 +994,7 @@ The hold task needs the package facts. Add this as the first task in the file:
 
 - [ ] **Step 7: Apply**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags nvidia --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags nvidia`
 
 - [ ] **Step 8: Confirm the driver did not change**
 
@@ -1167,7 +1190,7 @@ now share a filesystem with the OS.
 
 - [ ] **Step 6: Apply**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags docker --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags docker`
 
 - [ ] **Step 7: Apply again**
 
@@ -1414,7 +1437,7 @@ which is why this is a unit rather than a one-time `iptables` call.
 
 - [ ] **Step 8: Apply**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags firewall --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags firewall`
 Expected: `changed`, and the run completes without the connection dropping. If
 the playbook hangs at "Enable ufw", the allow-22 rule did not apply — you have
 roughly a session's grace to fix it from the existing connection.
@@ -1648,7 +1671,7 @@ check and a `when:` guard.
 
 - [ ] **Step 6: Apply**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags conda --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags conda`
 Expected: `changed`. The environment creation downloads packages and takes a
 few minutes.
 
@@ -1775,7 +1798,7 @@ belonging to `beekeeper` and `llm` — which is most of what runs on this box.
 
 - [ ] **Step 5: Apply**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags tools --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags tools`
 
 - [ ] **Step 6: Apply again**
 
@@ -2315,7 +2338,7 @@ the LAN.
 
 - [ ] **Step 9: Apply**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags webstack --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags webstack`
 Expected: `changed`. First run pulls several images and takes a few minutes.
 
 - [ ] **Step 10: Confirm the firewall boundary from ANOTHER machine**
@@ -2514,7 +2537,7 @@ beekeeper ALL=(root) NOPASSWD: /usr/bin/tee /etc/systemd/system/beekeeper.servic
 
 - [ ] **Step 6: Apply**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags beekeeper --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags beekeeper`
 Expected: `changed`. `setup.sh` builds a venv and pip-installs; this takes
 several minutes.
 
@@ -2559,13 +2582,13 @@ git commit -m "feat(beekeeper): validated sudoers, HTTPS clone, guarded upstream
 
 - [ ] **Step 1: Run the entire playbook from scratch on the configured host**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml`
 Expected: `changed=0` across every role. Anything that reports `changed` here
 is a role that does work on every run — find it and fix it.
 
 - [ ] **Step 2: Run the entire verify playbook**
 
-Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --ask-become-pass`
+Run: `ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml`
 Expected: all assertions pass.
 
 - [ ] **Step 3: Lint everything**
@@ -2582,7 +2605,7 @@ far proves the configuration survives a restart — in particular the
 ```bash
 ssh robertcowher@lab.local 'sudo systemctl reboot'
 # wait for it to come back
-ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --ask-become-pass
+ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml
 ```
 Expected: all assertions still pass. Confirm from your workstation that port
 3000 is still refused.

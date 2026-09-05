@@ -35,9 +35,13 @@ Probed directly on 2026-09-04, not assumed:
 | Docker | Not installed |
 | Conda | Not installed |
 | `/data` | Does not exist |
-| Access | SSH key auth works for `robertcowher`; **sudo requires a password** |
+| Access | SSH key auth works for `robertcowher`; sudo required a password at probe time |
 
-Runs therefore need `--ask-become-pass` (or a vaulted `ansible_become_password`).
+**Superseded 2026-09-05:** `robertcowher` was granted passwordless sudo, managed
+by the `users` role. The account is already in the `docker` group, which is
+root-equivalent with no password (`docker run -v /:/host`), so the password on
+sudo was not an actual security boundary — only an obstacle to automation. Runs
+need no `--ask-become-pass`.
 
 ---
 
