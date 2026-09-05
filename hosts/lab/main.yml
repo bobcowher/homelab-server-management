@@ -14,3 +14,4 @@
     - { role: docker, tags: [docker] }
     - { role: firewall, tags: [firewall] }
     - { role: conda, tags: [conda] }
+    - { role: tools, tags: [tools] }

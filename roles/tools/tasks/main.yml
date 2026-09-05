@@ -1,0 +1,41 @@
+---
+# The base/tools split follows one rule: would removing this break the server,
+# or merely annoy the operator?
+- name: Install apt tools
+  ansible.builtin.apt:
+    name: "{{ tools_apt }}"
+    state: present
+
+- name: Install pipx
+  ansible.builtin.apt:
+    name: pipx
+    state: present
+
+- name: Install pipx-managed tools system-wide
+  ansible.builtin.command:
+    cmd: "pipx install {{ item }}"
+    creates: "/usr/local/bin/{{ item }}"
+  environment:
+    # Ubuntu 26.04 enforces PEP 668, so a system-wide pip install fails
+    # outright, and nvitop is not packaged in the repos. This is the
+    # version-agnostic system-wide pattern; `pipx --global` is newer than what
+    # 26.04 ships (spec 5.8).
+    PIPX_HOME: /opt/pipx
+    PIPX_BIN_DIR: /usr/local/bin
+  loop: "{{ tools_pipx }}"
+
+# Operational note: nvitop must run as root to attribute GPU processes to
+# users. Unprivileged it masks processes belonging to beekeeper and llm --
+# which is most of what runs on this box.
+
+- name: Install Claude Code for robertcowher
+  ansible.builtin.shell:
+    cmd: set -o pipefail && curl -fsSL https://claude.ai/install.sh | bash
+    creates: /home/robertcowher/.local/bin/claude
+  args:
+    executable: /bin/bash
+  become: true
+  become_user: robertcowher
+  # Per-user, never as root: Claude Code self-updates, and a root install
+  # fights its own updater and puts credentials under the wrong home. Guarded
+  # on absence rather than pinned, for the same reason.

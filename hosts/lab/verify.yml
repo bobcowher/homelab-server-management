@@ -428,6 +428,43 @@
           environments.
       tags: [conda]
 
+    - name: Apt tools are installed
+      ansible.builtin.command: dpkg-query -W -f='${Status}' {{ item }}
+      register: tool_pkg
+      changed_when: false
+      failed_when: "'ok installed' not in tool_pkg.stdout"
+      loop: "{{ tools_apt }}"
+      tags: [tools]
+
+    - name: nvitop runs and can read the GPUs
+      ansible.builtin.command: /usr/local/bin/nvitop -1
+      become: true
+      register: nvitop_out
+      changed_when: false
+      tags: [tools]
+
+    - name: nvitop exercised the driver, NVML, and the Python bindings
+      ansible.builtin.assert:
+        that:
+          - nvitop_out.rc == 0
+        fail_msg: "nvitop failed: {{ nvitop_out.stderr | default('') }}"
+      tags: [tools]
+
+    - name: Claude Code is installed for robertcowher
+      ansible.builtin.command: /home/robertcowher/.local/bin/claude --version
+      become: true
+      become_user: robertcowher
+      register: claude_v
+      changed_when: false
+      tags: [tools]
+
+    - name: Claude Code reports a version
+      ansible.builtin.assert:
+        that:
+          - claude_v.rc == 0
+        fail_msg: "claude --version failed: {{ claude_v.stderr | default('') }}"
+      tags: [tools]
+
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
 # host pattern turns every assertion below into a silent pass. This play runs
