@@ -140,6 +140,7 @@ Routing is path-based on the single host `lab.local`.
 | `llm`, `files` users | Remain nologin | Only ever exec'd by systemd or docker; no execution path needs a shell |
 | Python | Miniforge at `/opt/conda`, shared, with profile.d init; env `beekeeper` at 3.12 | Conda is load-bearing for beekeeper's runtime and for interactive project work, so it is installed for humans as well as services. conda-forge avoids the Anaconda ToS question and is smaller |
 | Claude Code | Native installer, per-user for `robertcowher` | Self-updating, so Ansible ensures presence rather than pinning. The npm route would drag in a global node toolchain the host has no other use for |
+| Repo layout | Playbook per host under `hosts/<name>/`, roles shared at top level | This host is a 1-of-1, and the second lab server will differ in kind — AMD/Intel GPUs, or a beekeeper worker — not merely in values. See section 7 |
 | Hostnames | `lab.local`, HTTP only | Explicitly good enough for now; Caddy cannot issue certs for `.local` anyway |
 | llama-swap | Pin `v253`, checksum-verified | Latest release as of this date |
 
@@ -169,7 +170,8 @@ apt essentials (`build-essential`, `git`, `curl`, `ca-certificates`, `restic`,
 | `files` | 2003 | `/usr/sbin/nologin` | — |
 
 Numeric IDs are the mechanism by which `/data` ownership survives a rebuild.
-`verify.yml` asserts the numbers, not merely that the accounts exist.
+`hosts/lab/verify.yml` asserts the numbers, not merely that the accounts exist.
+They live in the fleet-wide `group_vars/all.yml`, not per host — see section 7.
 
 `docker` group membership is root-equivalent; it is granted deliberately to
 `robertcowher` and `llm` (llama-swap spawns backend containers).
@@ -211,7 +213,7 @@ expects it, so it is installed for humans as well as for services.
 Miniforge at `/opt/conda`, root-owned, group `ml`, read and execute for the
 group — **not** group-writable. A writable shared prefix would let any `ml`
 member mutate the `beekeeper` environment a running service depends on. Shared
-environments are declared in `group_vars/all.yml` and created by Ansible;
+environments are declared in `hosts/lab/vars.yml` and created by Ansible;
 personal environments land in `~/.conda/envs` automatically, because conda
 falls back to the first writable path in `envs_dirs`.
 
@@ -225,7 +227,7 @@ Environment `beekeeper` at Python 3.12 supplies the `python3.12` binary that
 `setup.sh` searches for.
 
 ### 5.8 `tools`
-Two lists in `group_vars/all.yml` so adding a tool is a one-line change, never
+Two lists in `hosts/lab/vars.yml` so adding a tool is a one-line change, never
 a role edit:
 
 ```yaml
@@ -305,20 +307,67 @@ Nothing is exposed to the internet.
 ## 7. Repo layout
 
 ```
-site.yml                  # full run, roles tagged
-verify.yml                # independent end-state assertions
-inventory/hosts.yml       # lab ansible_host=192.168.1.30
-group_vars/all.yml        # UIDs, GIDs, pinned versions, LAN subnet, tool lists
+inventory/hosts.yml       # every host; lab ansible_host=192.168.1.30
+group_vars/all.yml        # fleet invariants only: UIDs, GIDs, LAN subnet
+hosts/lab/main.yml        # this host's playbook — its roles, in order, tagged
+hosts/lab/vars.yml        # host specifics: driver branch, pinned versions, tool lists
+hosts/lab/verify.yml      # host-specific end-state assertions
 roles/{base,users,storage,nvidia,docker,firewall,conda,tools,llama_swap,webstack,beekeeper}/
 requirements.md           # source reference sheet (superseded where it conflicts)
 docs/superpowers/specs/   # this document
 ```
 
+Run with:
+
+```
+ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --ask-become-pass
+```
+
+### 7.1 Why this is not the conventional layout
+
+The usual `site.yml` plus inventory-groups structure assumes variation between
+hosts is *parametric*: the same roles everywhere, different values. That holds
+when you stamp out hundreds of one server class. It does not hold here.
+
+This host is a 1-of-1, and the second lab server is expected to differ in kind
+rather than in values — AMD or Intel GPUs, or a beekeeper worker running a
+subset of the services. Forced into the conventional layout, that variation has
+nowhere to live except inside the roles, and `when: gpu_vendor == 'nvidia'`
+branches accumulate until no host's configuration can be understood without
+mentally evaluating conditionals.
+
+A playbook per host puts the variation in the composition layer, where it reads
+as a list. Concretely: when a second host has AMD GPUs it gets a **new**
+`amd_gpu` role that its playbook includes *instead of* `nvidia` — not a vendor
+branch inside `nvidia`. Roles stay single-purpose; each playbook states which
+purposes that host wants, and in what order.
+
+### 7.2 Which variables live where
+
+`group_vars/all.yml` holds fleet invariants; `hosts/<name>/vars.yml` holds
+everything else. The test: **if two lab servers would have to agree on it, it
+is fleet-wide.**
+
+Numeric UIDs and GIDs are the load-bearing case. The entire reason they are
+pinned (section 5.2) is so `/data` ownership survives a rebuild. Copy-pasted
+into two host files, one eventually drifts, and restoring `/data` onto the
+wrong box silently produces wrong ownership — the exact failure the pinning
+exists to prevent. That value must exist in one place.
+
+Driver branches, pinned release versions, tool lists, and conda environments
+are host-specific and belong under `hosts/lab/`.
+
+### 7.3 No `site.yml` yet
+
+For a single host it is ceremony. It earns its place when there is a second
+host and a real reason to run both in one command; at that point it becomes a
+thin file importing each host's playbook.
+
 ---
 
 ## 8. Verification
 
-`verify.yml` asserts end state independently of Ansible's own change
+`hosts/lab/verify.yml` asserts end state independently of Ansible's own change
 reporting. `changed=0` proves the tasks ran, not that the host is correct.
 
 - Numeric UIDs and GIDs match section 5.2 exactly
