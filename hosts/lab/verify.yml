@@ -196,7 +196,7 @@
       ansible.builtin.command: apt-mark showhold
       register: holds
       changed_when: false
-      tags: [nvidia]
+      tags: [nvidia, docker]
 
     - name: NVIDIA packages are pinned against unattended upgrades
       ansible.builtin.assert:
@@ -207,6 +207,71 @@
           userspace libraries from the loaded kernel module and breaks every
           GPU container without warning (spec 3.6).
       tags: [nvidia]
+
+    - name: Docker daemon state
+      ansible.builtin.systemd_service:
+        name: docker
+      become: true
+      register: dockersvc
+      changed_when: false
+      tags: [docker]
+
+    - name: Docker is running and enabled
+      ansible.builtin.assert:
+        that:
+          - dockersvc.status.ActiveState == 'active'
+          - dockersvc.status.UnitFileState == 'enabled'
+        fail_msg: "Docker is {{ dockersvc.status.ActiveState }}"
+      tags: [docker]
+
+    - name: Compose plugin is present
+      ansible.builtin.command: docker compose version
+      become: true
+      register: composev
+      changed_when: false
+      tags: [docker]
+
+    - name: GPUs are visible inside a container
+      ansible.builtin.command: >-
+        docker run --rm --gpus all
+        nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi -L
+      become: true
+      register: cuda_smi
+      changed_when: false
+      tags: [docker]
+
+    - name: Both GPUs are passed through to containers
+      ansible.builtin.assert:
+        that:
+          - cuda_smi.stdout_lines | select('match', '^GPU') | list | length == 2
+        fail_msg: >-
+          Container sees {{ cuda_smi.stdout_lines | length }} GPU line(s).
+          "Package installed" is not proof of a working toolkit; this is.
+      tags: [docker]
+
+    - name: Read the docker group
+      ansible.builtin.getent:
+        database: group
+        key: docker
+      tags: [docker]
+
+    - name: robertcowher and llm can reach the docker socket
+      ansible.builtin.assert:
+        that:
+          - "'robertcowher' in getent_group['docker'][2]"
+          - "'llm' in getent_group['docker'][2]"
+        fail_msg: >-
+          docker group members are {{ getent_group['docker'][2] }};
+          llama-swap runs as llm and spawns backend containers.
+      tags: [docker]
+
+    - name: Docker packages are held
+      ansible.builtin.assert:
+        that:
+          - holds.stdout is search('docker-ce')
+          - holds.stdout is search('containerd')
+        fail_msg: "docker/containerd not held: {{ holds.stdout }}"
+      tags: [docker]
 
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the

@@ -11,3 +11,4 @@
     - { role: users, tags: [users] }
     - { role: storage, tags: [storage] }
     - { role: nvidia, tags: [nvidia] }
+    - { role: docker, tags: [docker] }

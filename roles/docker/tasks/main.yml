@@ -1,0 +1,86 @@
+---
+- name: Fetch the Docker signing key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Add the Docker repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: https://download.docker.com/linux/ubuntu
+    suites: ["{{ ansible_lsb.codename }}"]
+    components: [stable]
+    signed_by: /etc/apt/keyrings/docker.asc
+    state: present
+    enabled: true
+
+- name: Install Docker CE and the compose plugin
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: true
+
+- name: Configure the daemon
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+    # Log rotation is not cosmetic: vLLM containers are chatty and their logs
+    # now share a filesystem with the OS.
+    content: |
+      {
+        "runtimes": {
+          "nvidia": {
+            "path": "nvidia-container-runtime",
+            "runtimeArgs": []
+          }
+        },
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "50m",
+          "max-file": "3"
+        }
+      }
+  notify: Restart docker
+
+- name: Start and enable Docker
+  ansible.builtin.systemd_service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Add the deferred docker group memberships
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    groups: [docker]
+    append: true
+  loop: "{{ lab_users | selectattr('groups', 'contains', 'docker') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  # docker group membership is root-equivalent. Granted deliberately to
+  # robertcowher and to llm, which spawns backend containers (spec 5.2).
+
+- name: Gather installed package facts
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Hold docker packages against automatic upgrades
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: >-
+    {{ ansible_facts.packages.keys() | select('match', apt_hold_pattern) | sort | list }}
+  loop_control:
+    label: "{{ item }}"
+  # The nvidia role runs this too, but docker did not exist then so nothing
+  # matched. Each role holds its own packages once they are present.
