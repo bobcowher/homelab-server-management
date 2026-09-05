@@ -465,6 +465,52 @@
         fail_msg: "claude --version failed: {{ claude_v.stderr | default('') }}"
       tags: [tools]
 
+    - name: llama-swap service state
+      ansible.builtin.systemd_service:
+        name: llama-swap
+      become: true
+      register: lsvc
+      changed_when: false
+      tags: [llama_swap]
+
+    - name: llama-swap is active and enabled
+      ansible.builtin.assert:
+        that:
+          - lsvc.status.ActiveState == 'active'
+          - lsvc.status.UnitFileState == 'enabled'
+        fail_msg: "llama-swap is {{ lsvc.status.ActiveState }}"
+      tags: [llama_swap]
+
+    - name: llama-swap answers over the LAN address
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:8080/"
+        status_code: [200, 302, 404]
+      tags: [llama_swap]
+
+    - name: Read the unit file
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/llama-swap.service
+      become: true
+      register: lsunit
+      tags: [llama_swap]
+
+    - name: Device ordering is pinned and the service runs as llm
+      ansible.builtin.assert:
+        that:
+          - "'CUDA_DEVICE_ORDER=PCI_BUS_ID' in (lsunit.content | b64decode)"
+          - "'User=llm' in (lsunit.content | b64decode)"
+        fail_msg: >-
+          The 3060 sorts first by PCI bus ID, so without an explicit
+          CUDA_DEVICE_ORDER "GPU 0" is the smaller card (spec 3.5).
+      tags: [llama_swap]
+
+    - name: The installed config is valid
+      ansible.builtin.command: >-
+        /usr/local/bin/llama-swap -config /etc/llama-swap/config.yaml -validate
+      register: lsvalid
+      changed_when: false
+      tags: [llama_swap]
+
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
 # host pattern turns every assertion below into a silent pass. This play runs

@@ -15,3 +15,4 @@
     - { role: firewall, tags: [firewall] }
     - { role: conda, tags: [conda] }
     - { role: tools, tags: [tools] }
+    - { role: llama_swap, tags: [llama_swap] }

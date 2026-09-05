@@ -1,0 +1,18 @@
+[Unit]
+Description=llama-swap
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=llm
+Group=ml
+# The 3060 sorts first by PCI bus ID. Without this, "GPU 0" is the smaller
+# card and every model placement decision is silently inverted (spec 3.5).
+Environment=CUDA_DEVICE_ORDER=PCI_BUS_ID
+ExecStart=/usr/local/bin/llama-swap -config /etc/llama-swap/config.yaml -listen 0.0.0.0:8080
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

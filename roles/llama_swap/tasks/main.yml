@@ -1,0 +1,55 @@
+---
+- name: Create the config directory
+  ansible.builtin.file:
+    path: /etc/llama-swap
+    state: directory
+    owner: root
+    group: ml
+    mode: "0755"
+
+- name: Download the pinned llama-swap release
+  ansible.builtin.get_url:
+    url: >-
+      https://github.com/mostlygeek/llama-swap/releases/download/v{{ llama_swap_version }}/llama-swap_{{ llama_swap_version }}_linux_amd64.tar.gz
+    dest: "/tmp/llama-swap_{{ llama_swap_version }}.tar.gz"
+    checksum: "sha256:{{ llama_swap_sha256 }}"
+    mode: "0644"
+
+- name: Unpack llama-swap
+  ansible.builtin.unarchive:
+    src: "/tmp/llama-swap_{{ llama_swap_version }}.tar.gz"
+    dest: /usr/local/bin
+    remote_src: true
+    include: [llama-swap]
+    owner: root
+    group: root
+    mode: "0755"
+    creates: /usr/local/bin/llama-swap
+
+- name: Write the llama-swap config
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/llama-swap/config.yaml
+    owner: root
+    group: ml
+    mode: "0644"
+    # llama-swap can check its own config. Same reasoning as `sshd -t` and
+    # `visudo -c`: never install a config the service will choke on.
+    validate: /usr/local/bin/llama-swap -config %s -validate
+  notify: Restart llama-swap
+
+- name: Install the systemd unit
+  ansible.builtin.template:
+    src: llama-swap.service.j2
+    dest: /etc/systemd/system/llama-swap.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart llama-swap
+
+- name: Enable and start llama-swap
+  ansible.builtin.systemd_service:
+    name: llama-swap
+    enabled: true
+    state: started
+    daemon_reload: true
