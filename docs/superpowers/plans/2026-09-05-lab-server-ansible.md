@@ -247,7 +247,14 @@ apt_holds:
 
 conda_prefix: /opt/conda
 conda_envs:
+  # beekeeper: the service environment. setup.sh finds python3.12 here.
   - name: beekeeper
+    python: "3.12"
+  # py312: general-purpose 3.12 for interactive work. Read-only like every
+  # shared env; to install into it, clone it first:
+  #   conda create -n mywork --clone py312
+  # which lands in ~/.conda/envs and is writable.
+  - name: py312
     python: "3.12"
 
 tools_apt:
@@ -1446,6 +1453,14 @@ git commit -m "feat(firewall): ufw for native services, DOCKER-USER chain for co
 Conda is core infrastructure here, not a dependency workaround. It is installed
 for interactive use as well as for the beekeeper service.
 
+Two environments are created, both at 3.12: `beekeeper` for the service, and
+`py312` for interactive work, which is heavily used. Both are read-only, like
+the whole shared prefix. Installing into a shared env is done by cloning it —
+`conda create -n mywork --clone py312` — which lands in `~/.conda/envs` and is
+writable. The package cache follows the same fallback, so each user downloads
+their own copies; with ~1.7TB free that is the right trade against a writable
+shared prefix.
+
 - [ ] **Step 1: Write the failing assertions**
 
 Append to `hosts/lab/verify.yml`:
@@ -1500,6 +1515,35 @@ Append to `hosts/lab/verify.yml`:
       ansible.builtin.shell: bash -lc 'conda --version'
       register: condalogin
       changed_when: false
+      tags: [conda]
+
+    - name: Every declared environment exists at its pinned Python version
+      ansible.builtin.command: "{{ conda_prefix }}/envs/{{ item.name }}/bin/python --version"
+      register: envpy
+      changed_when: false
+      failed_when: item.python not in envpy.stdout
+      loop: "{{ conda_envs }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [conda]
+
+    - name: robertcowher can create his own writable environment
+      ansible.builtin.shell: |
+        bash -lc 'conda create -y -n _verify_scratch python=3.12 --dry-run'
+      become: true
+      become_user: robertcowher
+      register: envcreate
+      changed_when: false
+      tags: [conda]
+
+    - name: Personal environment creation resolves to a writable path
+      ansible.builtin.assert:
+        that:
+          - envcreate.rc == 0
+        fail_msg: >-
+          robertcowher cannot create a conda environment. The shared prefix is
+          read-only by design, so conda must fall back to ~/.conda/envs; if it
+          does not, envs_dirs is misconfigured.
       tags: [conda]
 ```
 
