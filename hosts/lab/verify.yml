@@ -273,6 +273,81 @@
         fail_msg: "docker/containerd not held: {{ holds.stdout }}"
       tags: [docker]
 
+    - name: Read ufw status
+      ansible.builtin.command: ufw status verbose
+      become: true
+      register: ufwst
+      changed_when: false
+      tags: [firewall]
+
+    - name: ufw denies by default and allows only the native LAN services
+      ansible.builtin.assert:
+        that:
+          - "'Status: active' in ufwst.stdout"
+          - "'deny (incoming)' in ufwst.stdout"
+          - ufwst.stdout is search('22')
+          - ufwst.stdout is search('8080')
+          - ufwst.stdout is search('5000')
+        fail_msg: "ufw is not in the expected state:\n{{ ufwst.stdout }}"
+      tags: [firewall]
+
+    - name: Read the DOCKER-USER chain
+      ansible.builtin.command: iptables -S DOCKER-USER
+      become: true
+      register: duser
+      changed_when: false
+      tags: [firewall]
+
+    - name: Container traffic is filtered, with return traffic preserved
+      ansible.builtin.assert:
+        that:
+          - duser.stdout is search('RELATED,ESTABLISHED')
+          - duser.stdout is search('dport 80')
+          - duser.stdout is search('-i ' ~ wan_interface ~ ' -j DROP')
+        fail_msg: >-
+          DOCKER-USER does not enforce the container policy:
+          {{ duser.stdout }}
+      tags: [firewall]
+
+    # This looks fussy but it checks a failure that presents as "containers
+    # mysteriously cannot reach the internet" and is hard to diagnose after
+    # the fact: DOCKER-USER sits in FORWARD, which also carries return
+    # traffic for outbound container connections.
+    - name: The conntrack RETURN precedes the DROP
+      ansible.builtin.assert:
+        that:
+          - >-
+            (duser.stdout_lines | select('search', 'RELATED,ESTABLISHED')
+             | list | length) > 0
+          - >-
+            duser.stdout_lines.index(
+              duser.stdout_lines | select('search', 'RELATED,ESTABLISHED') | first
+            ) < duser.stdout_lines.index(
+              duser.stdout_lines | select('search', '-j DROP') | first
+            )
+        fail_msg: >-
+          The DROP rule precedes the conntrack RETURN. Containers will lose
+          outbound networking with no error message.
+      tags: [firewall]
+
+    - name: The DOCKER-USER rules unit is enabled
+      ansible.builtin.systemd_service:
+        name: docker-user-rules
+      become: true
+      register: dursvc
+      changed_when: false
+      tags: [firewall]
+
+    - name: Rules survive a docker restart because they are a unit
+      ansible.builtin.assert:
+        that:
+          - dursvc.status.UnitFileState == 'enabled'
+        fail_msg: >-
+          docker-user-rules is {{ dursvc.status.UnitFileState }}. Docker
+          recreates the DOCKER-USER chain on daemon restart, so these rules
+          must be reapplied by a unit rather than set once.
+      tags: [firewall]
+
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
 # host pattern turns every assertion below into a silent pass. This play runs

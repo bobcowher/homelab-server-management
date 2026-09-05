@@ -1,0 +1,30 @@
+#!/bin/bash
+# Managed by Ansible.
+#
+# ufw cannot filter Docker published ports: Docker's nat PREROUTING and FORWARD
+# rules are evaluated before ufw's INPUT chain, so a container published with
+# -p 3000:3000 is LAN-reachable even under `ufw default deny incoming`.
+# Container ingress is filtered here instead.
+#
+# Flush-and-rebuild rather than insert-if-missing, so the result is identical
+# no matter how many times this runs and the rule ORDER is deterministic.
+set -euo pipefail
+
+LAN="{{ lan_subnet }}"
+WAN="{{ wan_interface }}"
+
+iptables -F DOCKER-USER
+
+# Return traffic for connections containers opened outbound. This MUST come
+# first: DOCKER-USER sits in FORWARD, which carries replies as well as new
+# inbound connections. Without this the DROP below blocks those replies and
+# every container silently loses outbound networking, with no error.
+iptables -A DOCKER-USER -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+
+# Caddy is the only container reachable from the LAN.
+iptables -A DOCKER-USER -p tcp -s "$LAN" --dport 80 -j RETURN
+
+# Everything else arriving on the LAN interface destined for a container.
+iptables -A DOCKER-USER -i "$WAN" -j DROP
+
+iptables -A DOCKER-USER -j RETURN

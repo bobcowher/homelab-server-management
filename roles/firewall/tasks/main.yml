@@ -1,0 +1,58 @@
+---
+- name: Install ufw
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+
+# Order below is critical. Allowing 22 must happen before enabling ufw, or
+# this playbook disconnects itself from a headless machine permanently.
+- name: Allow SSH from the LAN
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+    src: "{{ lan_subnet }}"
+
+- name: Allow the native LAN services
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+    src: "{{ lan_subnet }}"
+  loop:
+    - "8080"   # llama-swap
+    - "5000"   # beekeeper
+
+- name: Default deny incoming
+  community.general.ufw:
+    direction: incoming
+    policy: deny
+
+- name: Enable ufw
+  community.general.ufw:
+    state: enabled
+
+- name: Install the DOCKER-USER rule script
+  ansible.builtin.template:
+    src: docker-user-rules.sh.j2
+    dest: /usr/local/sbin/docker-user-rules.sh
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Apply docker-user rules
+
+- name: Install the DOCKER-USER systemd unit
+  ansible.builtin.template:
+    src: docker-user-rules.service.j2
+    dest: /etc/systemd/system/docker-user-rules.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Apply docker-user rules
+
+- name: Enable and start the DOCKER-USER rules unit
+  ansible.builtin.systemd_service:
+    name: docker-user-rules
+    enabled: true
+    state: started
+    daemon_reload: true

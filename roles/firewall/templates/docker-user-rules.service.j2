@@ -1,0 +1,14 @@
+[Unit]
+Description=Apply DOCKER-USER firewall rules
+# The DOCKER-USER chain does not exist until Docker has started, and Docker
+# recreates it on daemon restart. Hence a unit, not a one-time iptables call.
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/docker-user-rules.sh
+
+[Install]
+WantedBy=multi-user.target
