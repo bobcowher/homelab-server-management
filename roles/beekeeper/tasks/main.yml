@@ -1,0 +1,50 @@
+---
+- name: Install the sudoers drop-in
+  ansible.builtin.template:
+    src: beekeeper-sudoers.j2
+    dest: /etc/sudoers.d/beekeeper
+    owner: root
+    group: root
+    mode: "0440"
+    # Not optional. A parse error under /etc/sudoers.d breaks sudo for every
+    # user on the host, robertcowher included, and this playbook has no other
+    # route to root.
+    validate: /usr/sbin/visudo -cf %s
+
+- name: Clone the beekeeper repository
+  ansible.builtin.git:
+    repo: https://github.com/bobcowher/beekeeper.git
+    dest: "{{ beekeeper_home }}"
+    version: "{{ beekeeper_branch }}"
+    # Public repo, so no deploy key. deploy.sh only ever fetches.
+    update: true
+  become: true
+  become_user: beekeeper
+  register: bk_checkout
+
+- name: Check whether the venv already exists
+  ansible.builtin.stat:
+    path: "{{ beekeeper_home }}/venv/bin/python"
+  register: bk_venv
+
+- name: Run the upstream setup script
+  ansible.builtin.command:
+    cmd: bash setup.sh -y
+    chdir: "{{ beekeeper_home }}"
+  become: true
+  become_user: beekeeper
+  environment:
+    # setup.sh searches for python3.12, 3.11, 3.10, then falls back to
+    # python3. Only 3.14 exists natively and numpy<2.0 has no wheels for it,
+    # so the conda env is placed ahead on PATH to supply python3.12 (spec 3.3).
+    PATH: "{{ conda_prefix }}/envs/beekeeper/bin:/usr/local/bin:/usr/bin:/bin"
+  # Runs only when the checkout moved or the venv is missing, so a no-op play
+  # does not rebuild the environment every time.
+  when: bk_checkout.changed or not bk_venv.stat.exists
+
+- name: Ensure the service is enabled and running
+  ansible.builtin.systemd_service:
+    name: beekeeper
+    enabled: true
+    state: started
+    daemon_reload: true

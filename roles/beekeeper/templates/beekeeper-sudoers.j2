@@ -1,0 +1,21 @@
+# Managed by Ansible. Installed with visudo validation.
+#
+# Upstream setup.sh installs its own systemd service (spec 3.4), so the
+# beekeeper user needs to manage exactly that unit and nothing else. These
+# entries mirror the sudo calls in setup.sh: it writes the unit with
+# `cp $(mktemp) /etc/systemd/system/beekeeper.service`, then reloads, enables
+# and restarts.
+#
+# NOTE: permitting a write to a unit file is effectively root-equivalent --
+# whoever can write a unit can run arbitrary code as root. That follows
+# directly from the decision to let setup.sh own the unit. If that tradeoff
+# stops being acceptable, the alternative is for Ansible to template the unit
+# itself and grant only the systemctl verbs below.
+beekeeper ALL=(root) NOPASSWD: /usr/bin/cp /tmp/* /etc/systemd/system/beekeeper.service
+beekeeper ALL=(root) NOPASSWD: /usr/bin/systemctl daemon-reload
+beekeeper ALL=(root) NOPASSWD: /usr/bin/systemctl enable beekeeper
+beekeeper ALL=(root) NOPASSWD: /usr/bin/systemctl disable beekeeper
+beekeeper ALL=(root) NOPASSWD: /usr/bin/systemctl start beekeeper
+beekeeper ALL=(root) NOPASSWD: /usr/bin/systemctl stop beekeeper
+beekeeper ALL=(root) NOPASSWD: /usr/bin/systemctl restart beekeeper
+beekeeper ALL=(root) NOPASSWD: /usr/bin/systemctl status beekeeper
