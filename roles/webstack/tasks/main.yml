@@ -47,6 +47,18 @@
     mode: "0644"
   notify: Restart webstack
 
+# Must run after the container exists, because it edits the database Open WebUI
+# creates on first start. See the script for why compose env vars are not
+# enough: these settings are PersistentConfig, so the DB overrides the
+# environment on every start after the first.
+- name: Force Open WebUI's persisted settings to match this host
+  ansible.builtin.script:
+    cmd: openwebui_persistent_config.py
+  become: true
+  register: owui_config
+  changed_when: "'changed' in owui_config.stdout"
+  notify: Restart webstack
+
 - name: Enable and start the webstack project
   ansible.builtin.systemd_service:
     name: docker-compose@webstack
