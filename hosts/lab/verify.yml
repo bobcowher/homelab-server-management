@@ -751,16 +751,32 @@
         label: "{{ item.name }}"
       tags: [llama_swap]
 
-    - name: Every multi-GPU model sets its tensor split
+    - name: No model overrides llama.cpp's memory autotuner
       ansible.builtin.assert:
         that:
-          - item.tensor_split is defined
+          - item.tensor_split is not defined
+          - item.ngl is not defined
         fail_msg: >-
-          {{ item.name }} spans both cards but sets no tensor_split. The
-          proportions are in the same order as `gpus` and nvidia-smi
-          (3060 first, 3090 second), because the container runs with
-          CUDA_DEVICE_ORDER=PCI_BUS_ID.
-      loop: "{{ llama_models | selectattr('gpus', 'eq', 'all') | list }}"
+          {{ item.name }} sets tensor_split or ngl. Both disable llama.cpp's
+          --fit, which is what lets a model size itself to whatever VRAM is
+          actually free. `-ngl 99` aborts it outright: "n_gpu_layers already
+          set by user to 99, abort". Together they are what made a big model
+          OOM against the always-on 3060 model. --fit also measured FASTER
+          than a hand-tuned split. Leave both unset.
+      loop: "{{ llama_models }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [llama_swap]
+
+    - name: Exactly one lane may be resident, and only on the small card
+      ansible.builtin.assert:
+        that:
+          - item.gpus == 'device=0'
+        fail_msg: >-
+          {{ item.name }} is in the resident group but is not pinned to the
+          3060. A never-evicted model on the 3090 would permanently deny the
+          training card.
+      loop: "{{ llama_models | selectattr('group', 'defined') | selectattr('group', 'eq', 'resident') | list }}"
       loop_control:
         label: "{{ item.name }}"
       tags: [llama_swap]

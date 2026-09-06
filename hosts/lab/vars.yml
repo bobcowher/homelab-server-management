@@ -43,6 +43,10 @@ conda_envs:
     python: "3.12"
 
 tools_apt:
+  # aria2 is here for model weights: Hugging Face shapes per-connection
+  # throughput, so one stream decays to ~2 MB/s while 6 parallel ranges sustain
+  # ~49 MB/s. scripts/fetch_model.sh uses it. See docs/RUNBOOK.md.
+  - aria2
   - htop
   - nvtop
   - iotop
@@ -101,8 +105,17 @@ llama_swap_ttl_default: 900
 #   3060 only, 16k ctx           10779              65 tok/s    60 tok/s
 #
 # Spanning both cards nearly doubles generation because no expert weights cross
-# PCIe to system RAM. -sm layer is pipelined, not parallel: it buys capacity,
-# not parallel compute, which is why tensor_split proportions matter.
+# PCIe to system RAM.
+#
+# No tensor_split is set on purpose. llama.cpp's --fit (on by default) reads
+# free VRAM at load time and splits to match, which a static ratio cannot do:
+# with the resident Gemma holding 8.3GB of the 3060, --fit put 2.5GB there and
+# 23GB on the 3090 and ran at 159 tok/s -- FASTER than the hand-tuned 12,24
+# split managed with the 3060 empty (150 tok/s).
+#
+# That is the counter-intuitive part worth remembering: -sm layer is pipelined,
+# not parallel, so the 3060 is the slow link in the chain. Pushing MORE onto the
+# small card costs generation speed. Leave the split to --fit.
 #
 # n_cpu_moe keeps the MoE weights of the first N layers on the CPU. It is the
 # VRAM/throughput dial when a model does NOT fit in the 36GB combined pool;
@@ -114,8 +127,6 @@ llama_models:
     # re-pulling 19GB. New models should prefer `hf:`.
     file: Laguna-XS-2.1-Q4_K_M.gguf
     gpus: all              # both cards; 19GB of weights fit with room for KV
-    split_mode: layer      # default, stated explicitly: splits layers + KV
-    tensor_split: "12,24"  # 3060,3090 -- same order as nvidia-smi
     ctx: 65536
     threads: 16
     args: "--jinja -fa on --swa-full --cache-type-k q8_0 --cache-type-v q8_0"
@@ -128,33 +139,38 @@ llama_models:
   # hardware. Q6_K is effectively lossless against Q8 and still leaves ~11GB of
   # the 36GB pool for KV cache.
   - name: qwen3-coder
-    hf: unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q6_K
+    file: Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf
     gpus: all
-    split_mode: layer
-    tensor_split: "12,24"  # 3060,3090 -- same order as nvidia-smi
     ctx: 65536
     threads: 16
     # --jinja is required, not cosmetic: tool calling in a coding harness needs
     # the model's real chat template.
     args: "--jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0"
 
-  # --- pattern: a persistent, 3060-pinned model -----------------------------
-  # For a model that should sit resident and serve continuously (family use),
-  # pin it to the 3060 so the 3090 stays free for training. Measured at 60 tok/s
-  # for a 19GB model; a smaller one will do better.
+  # --- the resident lane ---------------------------------------------------
+  # General-purpose family model. Pinned to the 3060 and never evicted, so the
+  # 3090 stays free for training: `group: resident` puts it in a persistent
+  # llama-swap group that the big models cannot unload.
   #
-  # It must NOT be a member of the exclusive `gpu` group -- eviction is exactly
-  # what an always-on model must not suffer -- so adding one also means giving it
-  # its own group in roles/llama_swap/templates/config.yaml.j2.
+  # Gemma 4 12B is the largest Gemma that fits the 12GB card, and it is also
+  # the most capable one for this job: audio input is native only to E2B, E4B
+  # and 12B, so the 26B and 31B would cost the card AND lose a modality.
   #
-  #  - name: family-assistant
-  #    hf: <user>/<repo>:<quant>
-  #    gpus: "device=0"      # docker/PCI order: the 3060
-  #    ctx: 16384
-  #    threads: 16
-  #    ttl: 0                # never evict
-  #    args: "--jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0"
-
+  # Take the QAT build specifically. These are quantization-AWARE trained --
+  # Google trained them to be q4_0, so quality sits near bf16. A community Q6
+  # of the same model would be larger and worse. q4_0 is the intended format
+  # here, not a compromise.
+  #
+  # 6.5GB weights + 0.2GB vision projector leaves ~4.5GB for KV at 32k ctx.
+  - name: gemma-4-12b
+    file: gemma-4-12b-it-qat-q4_0.gguf
+    mmproj: mmproj-gemma-4-12b-it-qat-q4_0.gguf   # image + audio input
+    gpus: "device=0"       # the 3060
+    ctx: 32768
+    threads: 16
+    ttl: 0                 # never evict; verify.yml allows this ONLY on the 3060
+    group: resident
+    args: "--jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0"
 
 llama_swap_version: "253"
 llama_swap_sha256: 91f4d0af56cd5471d0133d6f89db7a7db118a9cd6f8ecd2bbdffd50aa29e5eb6

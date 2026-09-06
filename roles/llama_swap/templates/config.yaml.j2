@@ -3,21 +3,43 @@
 healthCheckTimeout: {{ llama_swap_health_timeout | default(900) }}
 
 {% if llama_models | default([]) | length > 0 %}
+{% set swapping = [] %}
+{% set resident = [] %}
+{% for m in llama_models %}
+{% if m.group | default('gpu') == 'resident' %}
+{% set _ = resident.append(m) %}
+{% else %}
+{% set _ = swapping.append(m) %}
+{% endif %}
+{% endfor %}
 groups:
-  # One exclusive, swapping group: at most ONE model holds VRAM at any time,
-  # and starting a second evicts the first. The default model spans BOTH cards,
-  # so two resident models would not fit anyway.
-  #
-  # A persistent 3060-pinned model (see the commented example in vars.yml) must
-  # NOT join this group -- being evicted is exactly what an always-on model
-  # must not do. Give it its own group with swap: false when that day comes.
+{% if swapping | length > 0 %}
+  # The swapping lane. At most ONE of these holds VRAM at a time, and starting
+  # a second evicts the first. These models span both cards, so two resident at
+  # once would not fit anyway. `exclusive` would also evict the resident lane
+  # below -- `persistent` on that group is what prevents it.
   gpu:
     swap: true
     exclusive: true
     members:
-{% for m in llama_models %}
+{% for m in swapping %}
       - "{{ m.name }}"
 {% endfor %}
+{% endif %}
+{% if resident | length > 0 %}
+  # The resident lane: always-on models pinned to the 3060, which stay loaded
+  # while the 3090 is free for training. `persistent` is the load-bearing flag
+  # -- it stops the exclusive group above from unloading these when a big model
+  # is called. `swap: false` lets more than one coexist if they fit.
+  resident:
+    swap: false
+    exclusive: false
+    persistent: true
+    members:
+{% for m in resident %}
+      - "{{ m.name }}"
+{% endfor %}
+{% endif %}
 
 models:
 {% for m in llama_models %}
@@ -39,7 +61,9 @@ models:
       -m /models/{{ m.file }}
 {% endif %}
       --host 127.0.0.1 --port ${PORT}
-      -ngl {{ m.ngl | default(99) }}
+{% if m.ngl is defined %}
+      -ngl {{ m.ngl }}
+{% endif %}
 {% if m.split_mode is defined %}
       -sm {{ m.split_mode }}
 {% endif %}
@@ -48,6 +72,9 @@ models:
 {% endif %}
 {% if m.n_cpu_moe is defined %}
       --n-cpu-moe {{ m.n_cpu_moe }}
+{% endif %}
+{% if m.mmproj is defined %}
+      --mmproj /models/{{ m.mmproj }}
 {% endif %}
       -c {{ m.ctx | default(8192) }}
       --threads {{ m.threads | default(8) }}

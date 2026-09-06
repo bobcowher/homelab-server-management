@@ -137,36 +137,54 @@ Models are declared in **`hosts/lab/vars.yml`** under `llama_models` — not in 
 
 > ⚠️ That agreement is *manufactured*, not natural. Left alone, CUDA orders devices fastest-first and calls the **3090** index 0 — the exact reverse. The role passes `-e CUDA_DEVICE_ORDER=PCI_BUS_ID` into each container to force PCI order. Remove that env var and every `tensor_split` silently inverts, quietly loading the big half of a model onto the small card. The `CUDA_DEVICE_ORDER` in the systemd unit does **not** cover this: it applies to the llama-swap process, and the model runs in a container with its own environment.
 
-### Three placements, measured
+### Let llama.cpp size the model — do not hand-tune it
 
-Same prompt, same harness (`scripts/bench_model.sh`), 200 generated tokens, on the 19 GB Laguna Q4_K_M:
+**Set neither `tensor_split` nor `ngl`.** `verify.yml` fails the run if you do. llama.cpp's `--fit` (on by default) reads *free* VRAM at load time and sizes the model to match, which a static config cannot do — it cannot know what else is already resident.
 
-| Placement | VRAM | Prompt | Generation | 3090 free for RL? |
-|---|---|---|---|---|
-| `gpus: all` | 18012 + 8747 | 409 tok/s | **150 tok/s** | no |
-| `gpus: device=1` + `n_cpu_moe: 20` | 16616 | 136 tok/s | 83 tok/s | no |
-| `gpus: device=0`, 16k ctx | 10779 | 65 tok/s | 60 tok/s | **yes** |
+This is not a small effect, and it is not what intuition predicts:
 
-Spanning both cards nearly doubles generation, because nothing has to push expert weights across PCIe into system RAM. That is the default. `-sm layer` is *pipelined*, not parallel — it buys capacity, not parallel compute, which is why the split proportions matter.
+| Placement | VRAM | Prompt | Generation |
+|---|---|---|---|
+| `--fit`, resident model holding the 3060 | 2.5 GB + 23 GB | 443 tok/s | **160 tok/s** |
+| hand-tuned `tensor_split: "12,24"`, 3060 empty | 8.7 GB + 18 GB | 409 tok/s | 150 tok/s |
+| `device=1` (3090 only) + `n_cpu_moe: 20` | 16.6 GB | 136 tok/s | 83 tok/s |
+| `device=0` (3060 only), 16k ctx | 10.8 GB | 65 tok/s | 60 tok/s |
 
-Pin to the 3060 only for a model that should sit resident and serve continuously. That is the one case where `ttl: 0` is allowed, and `verify.yml` enforces the pairing: a model may skip its eviction timer **only** if it is pinned to the small card, so nothing can ever squat on the 3090.
+The autotuner beat the hand-tuned split *while sharing a card with another model*. `-sm layer` is pipelined, not parallel, so the 3060 is the slow link in the chain — pushing **more** onto the small card costs generation speed rather than buying anything.
+
+> ⚠️ `-ngl 99` silently defeats all of this. llama.cpp says so plainly and then fails to load: `common_fit_params: failed to fit params to free device memory: n_gpu_layers already set by user to 99, abort`. That is why `ngl` is opt-in in the template rather than defaulted.
+
+It also degrades gracefully in the case that matters. With a training job holding 18 GB of the 3090 and the family model holding the 3060, a 19 GB model still loaded — 4.4 GB on the 3090, 2.5 GB on the 3060, the rest on CPU, at 34 tok/s. **The training job was untouched.** Slower, but serving, and nothing had to be evicted.
+
+### Two lanes: swapping and resident
+
+Models land in one of two llama-swap groups, chosen by the `group:` key.
+
+| | `gpu` (default) | `resident` |
+|---|---|---|
+| Placement | `gpus: all` | `gpus: device=0` (3060) |
+| Concurrency | one at a time | stays loaded |
+| Eviction | TTL, and by each other | never |
+| For | big transient models | the always-on family model |
+
+`resident` sets `persistent: true`, which is the load-bearing flag: without it the exclusive `gpu` group unloads the family model every time you ask a big model a question. **Verified**: with Gemma resident, loading laguna left Gemma loaded and answering.
+
+`verify.yml` enforces that a `resident` model is pinned to `device=0`. A never-evicted model on the 3090 would permanently deny the training card, which is the one thing this box must not do.
 
 ### 1. Get the weights
 
-Prefer `hf:` and let llama.cpp download into the shared cache:
-
-```yaml
-hf: unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q6_K
-```
-
-Or place a file yourself, for weights you already have locally:
+Use `scripts/fetch_model.sh`, which fetches in parallel and **verifies the sha256** against what Hugging Face publishes:
 
 ```bash
-# /data/models is group ml with setgid — new files stay group-readable
-scp mymodel-q4_k_m.gguf robertcowher@lab.local:/data/models/
+ssh lab
+bash scripts/fetch_model.sh google/gemma-4-12B-it-qat-q4_0-gguf gemma-4-12b-it-qat-q4_0.gguf
 ```
 
-File Browser at `lab.local/files/` writes as the `files` user into the same tree.
+> ⚠️ **Never skip the checksum.** A parallel fetch of a 24 GB model produced a file of *exactly* the right byte length whose contents were wrong. It loaded with no error and generated fluent gibberish (`告诉她-même-than淯-neck-neck-than...`). Size proves nothing; only the hash does. The script refuses to fetch anything Hugging Face does not publish a hash for.
+
+Two reasons not to use llama.cpp's built-in `-hf` downloader: it measured 0.5–4 MB/s where parallel fetching sustains ~100 MB/s, and it does no verification you can see. Hugging Face shapes throughput per connection — one stream starts near 30 MB/s and decays to ~2 MB/s within a minute.
+
+Weights can also be placed by hand; `/data/models` is group `ml` with setgid, so files stay readable by the `llm` and `beekeeper` users.
 
 ### 2. Declare it
 
@@ -174,16 +192,18 @@ Add an entry to `llama_models` in `hosts/lab/vars.yml`. `${PORT}` is llama-swap'
 
 ```yaml
   - name: my-model
-    hf: some-user/Some-Model-GGUF:Q6_K   # or: file: my-model-q4_k_m.gguf
-    gpus: all                            # all | device=0 (3060) | device=1 (3090)
-    split_mode: layer
-    tensor_split: "12,24"                # 3060,3090 — same order as nvidia-smi
+    file: my-model-q6_k.gguf     # fetched by scripts/fetch_model.sh
+    gpus: all                    # all | device=0 (3060) | device=1 (3090)
     ctx: 65536
     threads: 16
     args: "--jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0"
 ```
 
+For an always-on model on the 3060, add `group: resident` and `ttl: 0`. A multimodal model also takes `mmproj: <projector>.gguf`, which becomes `--mmproj`.
+
 `--jinja` is required for anything doing tool calls: it makes llama.cpp use the model's real chat template.
+
+Gemma 4 reasons before answering, which costs latency on trivial questions — 254 thinking tokens for "17 × 23", about six seconds. `--reasoning-budget N` caps it (`0` disables thinking, `-1` is unrestricted and the default). Left unrestricted for now; add it to `args` if the family model feels slow to answer simple things.
 
 ### 3. Apply and confirm
 
@@ -448,6 +468,14 @@ It points at `/home/bobcowher/beekeeper`; this host installs to `/home/beekeeper
 llama-swap arbitrates its own models against each other and knows nothing about training jobs;
 training jobs know nothing about it. Nothing coordinates the two — the manual path is
 [Freeing the GPU for a training run](#freeing-the-gpu-for-a-training-run).
+
+**This is smaller than it was.** Two things now blunt it without any coordination between the
+systems. The always-on family model is pinned to the 3060, so the thing most likely to be resident
+never touches the training card at all. And `--fit` sizes a model to whatever VRAM is *free* at
+load time, so a big model started while training is running takes what is left and spills the rest
+to CPU rather than failing — measured at 34 tok/s against a job holding 18 GB, with the job
+untouched. What remains unhandled is the reverse order: a training run that starts **after** a
+model is already resident still gets `CUDA_ERROR_OUT_OF_MEMORY`, because CUDA will not preempt.
 
 Automating it was considered and **deliberately deferred**. The obvious trigger, a Beekeeper
 job-start hook, would push a lab-specific VRAM policy into a public project that every other user
