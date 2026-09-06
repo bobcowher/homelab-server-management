@@ -138,6 +138,10 @@ llama_models:
   # a dense 32B while scoring in the same class -- the right shape for this
   # hardware. Q6_K is effectively lossless against Q8 and still leaves ~11GB of
   # the 36GB pool for KV cache.
+  #
+  # Measured (200 tokens, with Gemma resident on the 3060): 160 tok/s prompt,
+  # 104 tok/s generation. Slower than Laguna's 163 because Q6_K moves more
+  # bytes per token than Laguna's Q4_K_M, which is the trade for the quality.
   - name: qwen3-coder
     file: Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf
     gpus: all

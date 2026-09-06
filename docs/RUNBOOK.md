@@ -156,6 +156,18 @@ The autotuner beat the hand-tuned split *while sharing a card with another model
 
 It also degrades gracefully in the case that matters. With a training job holding 18 GB of the 3090 and the family model holding the 3060, a 19 GB model still loaded — 4.4 GB on the 3090, 2.5 GB on the 3060, the rest on CPU, at 34 tok/s. **The training job was untouched.** Slower, but serving, and nothing had to be evicted.
 
+### The current catalog, measured
+
+Same prompt, 200 generated tokens, with Gemma resident on the 3060:
+
+| Model | Lane | Prompt | Generation | Notes |
+|---|---|---|---|---|
+| `laguna-xs-2.1` | swapping | 443 tok/s | **163 tok/s** | Q4_K_M, general |
+| `qwen3-coder` | swapping | 160 tok/s | **104 tok/s** | Q6_K, coding + tool calls |
+| `gemma-4-12b` | resident | 214 tok/s | **41 tok/s** | 3060 only, text+image+audio |
+
+Laguna and Qwen both reason before answering, and so does Gemma — a short `max_tokens` can be consumed entirely by `reasoning_content`, returning an empty `content` that looks like a failure but is not. Raise `max_tokens` or cap thinking with `--reasoning-budget`.
+
 ### Two lanes: swapping and resident
 
 Models land in one of two llama-swap groups, chosen by the `group:` key.
