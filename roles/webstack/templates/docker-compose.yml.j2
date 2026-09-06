@@ -30,6 +30,13 @@ services:
       - OPENAI_API_BASE_URL=http://host.docker.internal:8080/v1
       - OPENAI_API_KEY=none
       - WEBUI_AUTH=true
+      # There is no Ollama on this host -- llama-swap serves the OpenAI API
+      # instead. Without this, get_all_models() still fans out to the Ollama
+      # backend on every page load and blocks until the connection fails,
+      # measured at 1.7s to 11s of spinner before the chat page appears.
+      # USE_OLLAMA_DOCKER=false only stops the bundled server from starting;
+      # it does not stop the API from being polled.
+      - ENABLE_OLLAMA_API=false
     volumes:
       - {{ data_root }}/open-webui:/app/backend/data
     # The image's own healthcheck pipes /health into
