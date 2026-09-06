@@ -158,7 +158,7 @@ It also degrades gracefully in the case that matters. With a training job holdin
 
 ### The current catalog, measured
 
-Same prompt, 200 generated tokens, with Gemma resident on the 3060:
+Same prompt, 200 generated tokens, with Gemma resident on the 3060. Reproduce with `scripts/bench_swap.sh <model>` on the host:
 
 | Model | Lane | Prompt | Generation | Notes |
 |---|---|---|---|---|
