@@ -20,6 +20,39 @@
     - "{{ data_root }}/filebrowser/database"
     - "{{ data_root }}/filebrowser/config"
 
+# Deliberately not in the loop above. The SearXNG container chowns /etc/searxng
+# to its own uid on every start, so declaring an owner here would make this task
+# report "changed" on every run forever. Ownership is the container's business;
+# Ansible only guarantees the directory exists.
+- name: Create the SearXNG config directory
+  ansible.builtin.file:
+    path: "{{ data_root }}/searxng"
+    state: directory
+    mode: "0755"
+
+# Generated on the host and never rendered into the repo. This repository is
+# public; a secret in a template would be published with it.
+- name: Generate the SearXNG secret key if it does not exist
+  ansible.builtin.shell:
+    cmd: umask 077 && openssl rand -hex 32 > {{ data_root }}/searxng/secret_key
+    creates: "{{ data_root }}/searxng/secret_key"
+
+- name: Read the SearXNG secret key
+  ansible.builtin.slurp:
+    src: "{{ data_root }}/searxng/secret_key"
+  register: searxng_secret_raw
+
+- name: Write the SearXNG settings
+  ansible.builtin.template:
+    src: searxng-settings.yml.j2
+    dest: "{{ data_root }}/searxng/settings.yml"
+    # No owner/group for the same reason as the directory above: the container
+    # takes ownership, and fighting it would mean a permanent "changed".
+    mode: "0644"
+  vars:
+    searxng_secret: "{{ searxng_secret_raw.content | b64decode | trim }}"
+  notify: Restart webstack
+
 - name: Write the Caddyfile
   ansible.builtin.template:
     src: Caddyfile.j2
@@ -47,13 +80,21 @@
     mode: "0644"
   notify: Restart webstack
 
+- name: Declare Open WebUI's persisted settings
+  ansible.builtin.template:
+    src: openwebui-desired-config.json.j2
+    dest: /etc/docker/compose/webstack/openwebui-config.json
+    owner: root
+    group: root
+    mode: "0644"
+
 # Must run after the container exists, because it edits the database Open WebUI
 # creates on first start. See the script for why compose env vars are not
 # enough: these settings are PersistentConfig, so the DB overrides the
 # environment on every start after the first.
 - name: Force Open WebUI's persisted settings to match this host
   ansible.builtin.script:
-    cmd: openwebui_persistent_config.py
+    cmd: openwebui_persistent_config.py /etc/docker/compose/webstack/openwebui-config.json
   become: true
   register: owui_config
   changed_when: "'changed' in owui_config.stdout"

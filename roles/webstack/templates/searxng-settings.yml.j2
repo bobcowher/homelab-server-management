@@ -1,0 +1,19 @@
+# Managed by Ansible.
+use_default_settings: true
+
+server:
+  secret_key: "{{ searxng_secret }}"
+  # The limiter exists to stop scraping by strangers. Nothing outside the
+  # compose network can reach this container -- it publishes no ports and Caddy
+  # does not proxy it -- and the only client is Open WebUI making bursts of
+  # programmatic queries, which is exactly what the limiter blocks.
+  limiter: false
+  image_proxy: true
+
+search:
+  # `json` is the reason this file exists. SearXNG ships HTML-only by default,
+  # and Open WebUI's searxng backend parses JSON -- without this every search
+  # fails with a 403.
+  formats:
+    - html
+    - json

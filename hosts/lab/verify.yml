@@ -532,6 +532,14 @@
         url: "http://{{ ansible_host }}/"
         status_code: [200, 302, 401]
         follow_redirects: none
+      # Open WebUI takes tens of seconds to become ready, so when a handler has
+      # just restarted the stack this races and Caddy answers 502. Retrying is
+      # the assertion working, not a weakened one -- it still fails if the app
+      # never comes back.
+      register: webui_root
+      retries: 20
+      delay: 5
+      until: webui_root.status in [200, 302, 401]
       tags: [webstack]
 
     - name: Caddy serves File Browser under /files
@@ -591,10 +599,11 @@
       changed_when: false
       tags: [webstack]
 
-    - name: Five containers up, no unhealthy ones
+    - name: Six containers up, no unhealthy ones
       ansible.builtin.assert:
         that:
-          - wcontainers.stdout_lines | length == 5
+          # caddy, open-webui, filebrowser, dcgm-exporter, node-exporter, searxng
+          - wcontainers.stdout_lines | length == 6
           - wcontainers.stdout is not search('unhealthy')
         fail_msg: "webstack containers: {{ wcontainers.stdout }}"
       tags: [webstack]

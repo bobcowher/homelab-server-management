@@ -1,0 +1,13 @@
+{
+  "_comment": "Managed by Ansible. These are Open WebUI PersistentConfig keys: the compose env only seeds them on first start, so they are forced here instead. Edit hosts/lab/vars.yml, not this file.",
+
+  "ollama.enable": false,
+
+  "openai.api_base_urls": ["http://host.docker.internal:8080/v1"],
+
+  "web.search.enable": {{ openwebui_web_search | default(true) | to_json }},
+  "web.search.engine": "searxng",
+  "web.search.searxng_query_url": "http://searxng:8080/search?q=<query>",
+  "web.search.result_count": {{ openwebui_web_search_results | default(5) }},
+  "web.search.concurrent_requests": {{ openwebui_web_search_concurrency | default(4) }}
+}

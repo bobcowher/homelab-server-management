@@ -22,11 +22,12 @@ for convenience; if the two ever disagree, this one is right.
 2. [Where to change what](#where-to-change-what)
 3. [What runs where](#what-runs-where)
 4. [Adding a model](#adding-a-model)
-5. [Routine changes](#routine-changes)
-6. [Upgrades and holds](#upgrades-and-holds)
-7. [When it breaks](#when-it-breaks)
-8. [Handle with care](#handle-with-care)
-9. [Known gaps](#known-gaps)
+5. [Web search](#web-search)
+6. [Routine changes](#routine-changes)
+7. [Upgrades and holds](#upgrades-and-holds)
+8. [When it breaks](#when-it-breaks)
+9. [Handle with care](#handle-with-care)
+10. [Known gaps](#known-gaps)
 
 ---
 
@@ -296,6 +297,36 @@ ssh lab '/opt/conda/envs/py312/bin/python /tmp/vram_probe.py 1 20'   # device 1 
 ```
 
 Exit code 2 means out of memory, 1 means any other CUDA failure.
+
+---
+
+## Web search
+
+Open WebUI can search the web before answering. The backend is **SearXNG**, running in the same compose project.
+
+It publishes no ports and Caddy does not proxy it, so nothing on the LAN can query it — Open WebUI reaches it by service name at `http://searxng:8080`. Its secret key is generated on the host at `/data/searxng/secret_key` and never enters this repo, which is public.
+
+Two settings are load-bearing and easy to lose:
+
+- **`formats: [html, json]`** in `searxng-settings.yml.j2`. SearXNG ships HTML-only; Open WebUI's backend parses JSON. Without it every search fails with a 403.
+- **`limiter: false`**. The limiter exists to stop scraping by strangers, and the only client here is Open WebUI issuing bursts of programmatic queries — exactly what it blocks. Safe only because the container is unreachable from outside the compose network.
+
+Check it directly:
+
+```bash
+ssh lab 'docker exec webstack-open-webui-1 \
+  curl -s "http://searxng:8080/search?q=test&format=json" | jq ".results | length"'
+```
+
+An engine failing is normal and not a fault — SearXNG aggregates many, and a `CAPTCHA` entry under `unresponsive_engines` (DuckDuckGo does this often) just means the others carried the query.
+
+### ⚠️ Open WebUI settings do not come from the compose file
+
+Most Open WebUI settings are **PersistentConfig**: the environment variable seeds the value on the *first* start only, and from then on the copy in `webui.db` wins. A compose env var can therefore say one thing while the running app does another, with nothing reporting the drift.
+
+This is not hypothetical. A hard-coded `192.168.1.30` survived the DHCP audit inside that database, and `ENABLE_OLLAMA_API=false` silently did nothing while every page load spent ~10s waiting on an Ollama that does not exist.
+
+Declare such settings in `roles/webstack/templates/openwebui-desired-config.json.j2`. The play forces them into the database, reports `changed` only when it writes, and restarts the container. **Changing one of these in the Open WebUI admin UI will be reverted on the next Ansible run** — that is the point, but it will surprise you if you forget.
 
 ---
 

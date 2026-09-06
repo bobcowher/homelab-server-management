@@ -16,6 +16,23 @@ services:
       - open-webui
       - filebrowser
 
+  # Web search backend for Open WebUI. Publishes no ports and is not proxied by
+  # Caddy: it is reachable only from this compose network, addressed as
+  # http://searxng:8080 by service name. Nothing on the LAN can query it.
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    restart: unless-stopped
+    volumes:
+      - {{ data_root }}/searxng:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+
   open-webui:
     image: ghcr.io/open-webui/open-webui:main
     restart: unless-stopped
@@ -37,6 +54,8 @@ services:
       # USE_OLLAMA_DOCKER=false only stops the bundled server from starting;
       # it does not stop the API from being polled.
       - ENABLE_OLLAMA_API=false
+    depends_on:
+      - searxng
     volumes:
       - {{ data_root }}/open-webui:/app/backend/data
     # The image's own healthcheck pipes /health into

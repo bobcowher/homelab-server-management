@@ -1,63 +1,69 @@
 #!/usr/bin/env python3
-"""Force values into Open WebUI's persisted config.
+"""Force declared values into Open WebUI's persisted config.
 
 Open WebUI treats many settings as PersistentConfig: the environment variable
 seeds the value on FIRST start only, and from then on the copy in webui.db
 wins. Compose env vars are therefore not authoritative, and a setting can drift
-from what Ansible declares without anything reporting a change.
+from what Ansible declares without anything reporting a change. That is not
+theoretical -- it is how a hard-coded 192.168.1.30 survived the DHCP audit, and
+how ENABLE_OLLAMA_API=false silently did nothing.
 
-Two settings here are load-bearing:
+Desired values come from a JSON file rendered by Ansible, so this script holds
+no policy of its own. Values are compared as parsed JSON, not as text, so
+formatting differences do not read as drift.
 
-  ollama.enable          -- with no Ollama on this host, get_all_models() still
-                            fanned out to it and blocked ~10s per page load
-                            before the connection failed. ENABLE_OLLAMA_API=false
-                            in compose did NOT fix it, because of the above.
+Prints "changed" if it wrote anything, so Ansible reports accurately and
+restarts the container only when needed.
 
-  openai.api_base_urls   -- had a hard-coded 192.168.1.30 baked in. The LAN is
-                            DHCP, so that is a landmine: it works until the
-                            lease changes, then every model fetch hangs.
-                            host.docker.internal survives an address change.
-
-Prints "changed" if it wrote anything, so Ansible can report accurately and
-restart the container only when needed.
+  openwebui_persistent_config.py <desired.json> [webui.db]
 """
 import json
 import sqlite3
 import sys
 
-DB = "/data/open-webui/webui.db"
-
-WANTED = {
-    "ollama.enable": json.dumps(False),
-    "openai.api_base_urls": json.dumps(["http://host.docker.internal:8080/v1"]),
-}
+DEFAULT_DB = "/data/open-webui/webui.db"
 
 
-def main():
+def main(argv):
+    if len(argv) < 2:
+        print("usage: openwebui_persistent_config.py <desired.json> [db]")
+        return 2
+
+    with open(argv[1]) as fh:
+        wanted = json.load(fh)
+
+    db = argv[2] if len(argv) > 2 else DEFAULT_DB
+
     try:
-        conn = sqlite3.connect(DB)
+        conn = sqlite3.connect(db)
+        conn.execute("select 1 from config limit 1")
     except sqlite3.Error as exc:
         # A fresh install has no database until the container first starts.
-        # Nothing to correct yet, and the compose env seeds it correctly.
-        print("skipped: cannot open %s (%s)" % (DB, exc))
+        # Nothing to correct yet; compose env seeds the initial values.
+        print("skipped: %s not usable yet (%s)" % (db, exc))
         return 0
 
     changed = []
     with conn:
-        for key, value in WANTED.items():
+        for key, value in wanted.items():
             row = conn.execute(
                 "select value from config where key = ?", (key,)
             ).fetchone()
             if row is None:
-                # Key absent means Open WebUI has not seeded it; leave it alone
-                # rather than inventing schema.
+                # Key absent means Open WebUI has not seeded it. Do not invent
+                # schema; a version that wants this key will create it.
                 continue
-            if row[0] == value:
+            try:
+                current = json.loads(row[0])
+            except (TypeError, ValueError):
+                current = row[0]
+            if current == value:
                 continue
             conn.execute(
-                "update config set value = ? where key = ?", (value, key)
+                "update config set value = ? where key = ?",
+                (json.dumps(value), key),
             )
-            changed.append("%s: %s -> %s" % (key, row[0], value))
+            changed.append("%s: %r -> %r" % (key, current, value))
 
     conn.close()
     if changed:
@@ -70,4 +76,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv))
