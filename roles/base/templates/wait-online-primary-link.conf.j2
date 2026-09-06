@@ -1,0 +1,23 @@
+# Managed by Ansible.
+#
+# This host has a second NIC, {{ 'enp6s0f1' if wan_interface == 'enp5s0' else 'a second port' }},
+# with no cable in it. netplan generates a drop-in whose first ExecStart is
+#
+#   systemd-networkd-wait-online -i <primary>:degraded -i <secondary>:degraded
+#
+# with no --any, so it requires EVERY managed link to reach `degraded`. An
+# empty port sits at `no-carrier`, below `degraded`, and can never satisfy it,
+# so the unit burns its full 120s timeout on every boot.
+#
+# That is not merely slow. docker.service and llama-swap.service both Want
+# network-online.target, which pulls the waiter into the boot transaction;
+# remote-fs.target queues behind it, and systemd-user-sessions.service --
+# which removes /run/nologin -- queues behind that. The result is a two-minute
+# window after every boot where SSH answers but refuses every non-root login
+# with "System is booting up". On a headless machine that reads as a lockout.
+#
+# Wait only for the link that carries traffic, and cap it.
+[Service]
+ExecStart=
+ExecStart=/usr/lib/systemd/systemd-networkd-wait-online --any -o routable -i {{ wan_interface }}
+TimeoutStartSec=30

@@ -56,6 +56,23 @@
       APT::Periodic::Update-Package-Lists "1";
       APT::Periodic::Unattended-Upgrade "1";
 
+- name: Ensure the wait-online drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/systemd-networkd-wait-online.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Wait only for the primary link at boot
+  ansible.builtin.template:
+    src: wait-online-primary-link.conf.j2
+    dest: /etc/systemd/system/systemd-networkd-wait-online.service.d/20-lab-primary-link.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
 - name: Harden sshd
   ansible.builtin.copy:
     dest: /etc/ssh/sshd_config.d/10-lab.conf

@@ -293,6 +293,8 @@ ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml
 
 | Symptom | Likely cause | Check |
 |---|---|---|
+| SSH: *"System is booting up. Unprivileged users are not permitted to log in yet"* | `/run/nologin` still present — `systemd-user-sessions` queued behind a slow `network-online.target`. **Not a lockout; it clears.** Stop retrying: rapid attempts trip `MaxStartups` and add confusing `kex_exchange_identification` resets on top. | `systemd-analyze blame \| head` |
+| Boot takes minutes | `systemd-networkd-wait-online` waiting on a NIC with no cable | `systemd-analyze critical-chain systemd-user-sessions.service` |
 | Containers can't reach the internet | conntrack RETURN in `DOCKER-USER` missing or ordered after the DROP. Presents as silent hangs, no error. | `sudo iptables -S DOCKER-USER` |
 | Open WebUI model dropdown is empty | Container → host traffic blocked; the bridge-range ufw rule is missing | `sudo docker exec webstack-open-webui-1 curl -s -o /dev/null -w '%{http_code}' http://host.docker.internal:8080/v1/models` |
 | A container is LAN-reachable that shouldn't be | It's publishing to `0.0.0.0`. ufw will not save you. | `ss -ltn` |
@@ -311,6 +313,30 @@ ssh robertcowher@lab.local 'sudo nvitop -1'
 # restart the web stack
 ssh robertcowher@lab.local 'sudo systemctl restart docker-compose@webstack'
 ```
+
+---
+
+### The empty second NIC
+
+This box has two network ports and one cable. `systemd-networkd-wait-online`
+waits for **all** managed links by default, and netplan generates a drop-in
+whose first `ExecStart` has no `--any` — so it required both links to come up.
+The empty port sits at `no-carrier` forever, and the unit burned its full 120s
+timeout on every boot.
+
+That is not just slow. `docker.service` and `llama-swap.service` both
+`Wants=network-online.target`, which pulls the waiter into the boot;
+`remote-fs.target` queues behind it, and `systemd-user-sessions.service` —
+which deletes `/run/nologin` — queues behind that. The result was a two-minute
+window after every boot where SSH answered but refused every non-root login.
+On a headless machine that reads as a lockout.
+
+The `base` role installs a drop-in scoping the wait to `wan_interface` with
+`--any` and a 30s cap. Userspace boot went from **2min 6s to 10.6s**, and
+`verify.yml` now asserts both the scoping and that `/run/nologin` is absent.
+
+**If you ever plug in the second port**, nothing breaks — `--any` is satisfied
+by the first link that comes up.
 
 ---
 

@@ -655,6 +655,47 @@
       changed_when: false
       tags: [beekeeper]
 
+    - name: Read the effective wait-online configuration
+      ansible.builtin.command: systemctl cat systemd-networkd-wait-online.service
+      become: true
+      register: waitonline
+      changed_when: false
+      tags: [base]
+
+    - name: Boot waits only for the primary link
+      ansible.builtin.assert:
+        that:
+          - >-
+            waitonline.stdout_lines
+            | select('search', '^ExecStart=.*wait-online')
+            | list | last is search('--any')
+          - >-
+            waitonline.stdout_lines
+            | select('search', '^ExecStart=.*wait-online')
+            | list | last is search('-i ' ~ wan_interface)
+        fail_msg: >-
+          The last effective ExecStart does not scope wait-online to
+          {{ wan_interface }} with --any. An empty second NIC sits at
+          no-carrier forever, so the unit burns its full timeout, delaying
+          systemd-user-sessions and leaving /run/nologin in place -- SSH
+          answers but refuses every non-root login for two minutes.
+      tags: [base]
+
+    - name: No stale nologin lock is present
+      ansible.builtin.stat:
+        path: /run/nologin
+      register: nologin
+      tags: [base]
+
+    - name: Logins are permitted
+      ansible.builtin.assert:
+        that:
+          - not nologin.stat.exists
+        fail_msg: >-
+          /run/nologin exists, so unprivileged SSH logins are refused. Boot
+          did not finish cleanly, or a shutdown is pending.
+      tags: [base]
+
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
 # host pattern turns every assertion below into a silent pass. This play runs
