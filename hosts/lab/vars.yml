@@ -80,23 +80,81 @@ llama_swap_ttl_default: 900
 #   hf:    "<user>/<repo>[:quant]"   -- llama.cpp downloads and caches it
 #   file:  "<name>.gguf"             -- an existing file in /data/models
 #
-# device: 0 = RTX 3060 (12GB), 1 = RTX 3090 (24GB). Always set it explicitly;
-# the 3060 sorts first by PCI bus ID, so "GPU 0" is the smaller card.
+# GPU PLACEMENT -- ONE index space, everywhere:
+#
+#   index 0 = RTX 3060, 12GB, PCI 04:00.0
+#   index 1 = RTX 3090, 24GB, PCI 0A:00.0
+#
+# That holds for `gpus`, for `tensor_split`, and for nvidia-smi. It is only
+# true because the container is started with CUDA_DEVICE_ORDER=PCI_BUS_ID (see
+# the role template). Without it, llama.cpp sorts fastest-first and silently
+# reverses tensor_split relative to `gpus` -- the small card is index 0 here,
+# which is the opposite of what CUDA would pick on its own. Do not remove that
+# env var without also flipping every tensor_split below.
+#
+# Measured on this box, same prompt and harness (scripts/bench_model.sh),
+# 200 generated tokens:
+#
+#   placement                    VRAM              prompt      generation
+#   both cards (default)         18012 + 8747      409 tok/s   150 tok/s
+#   3090 only, n_cpu_moe 20      16616             136 tok/s    83 tok/s
+#   3060 only, 16k ctx           10779              65 tok/s    60 tok/s
+#
+# Spanning both cards nearly doubles generation because no expert weights cross
+# PCIe to system RAM. -sm layer is pipelined, not parallel: it buys capacity,
+# not parallel compute, which is why tensor_split proportions matter.
 #
 # n_cpu_moe keeps the MoE weights of the first N layers on the CPU. It is the
-# VRAM/throughput dial for MoE models and is measured per model, not guessed --
-# see scripts/tune_offload.py in the local_setup repo.
+# VRAM/throughput dial when a model does NOT fit in the 36GB combined pool;
+# it is measured per model, never guessed. The default model no longer needs it.
 llama_models:
   - name: laguna-xs-2.1
     # Weights were transferred over the LAN and sha256-verified against the
     # value Hugging Face reports, so this uses the local file rather than
     # re-pulling 19GB. New models should prefer `hf:`.
     file: Laguna-XS-2.1-Q4_K_M.gguf
-    device: 1              # 3090
+    gpus: all              # both cards; 19GB of weights fit with room for KV
+    split_mode: layer      # default, stated explicitly: splits layers + KV
+    tensor_split: "12,24"  # 3060,3090 -- same order as nvidia-smi
     ctx: 65536
-    n_cpu_moe: 20          # measured: 16848 MiB VRAM, 117.4 tok/s
     threads: 16
     args: "--jinja -fa on --swa-full --cache-type-k q8_0 --cache-type-v q8_0"
+    # No n_cpu_moe: the combined 36GB pool holds the whole model, and dropping
+    # the CPU offload is where the 83 -> 150 tok/s came from.
+
+  # Coding / agent-harness model. Qwen3-Coder-30B-A3B is a Mixture-of-Experts
+  # with only ~3B parameters active per token, so it generates far faster than
+  # a dense 32B while scoring in the same class -- the right shape for this
+  # hardware. Q6_K is effectively lossless against Q8 and still leaves ~11GB of
+  # the 36GB pool for KV cache.
+  - name: qwen3-coder
+    hf: unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q6_K
+    gpus: all
+    split_mode: layer
+    tensor_split: "12,24"  # 3060,3090 -- same order as nvidia-smi
+    ctx: 65536
+    threads: 16
+    # --jinja is required, not cosmetic: tool calling in a coding harness needs
+    # the model's real chat template.
+    args: "--jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0"
+
+  # --- pattern: a persistent, 3060-pinned model -----------------------------
+  # For a model that should sit resident and serve continuously (family use),
+  # pin it to the 3060 so the 3090 stays free for training. Measured at 60 tok/s
+  # for a 19GB model; a smaller one will do better.
+  #
+  # It must NOT be a member of the exclusive `gpu` group -- eviction is exactly
+  # what an always-on model must not suffer -- so adding one also means giving it
+  # its own group in roles/llama_swap/templates/config.yaml.j2.
+  #
+  #  - name: family-assistant
+  #    hf: <user>/<repo>:<quant>
+  #    gpus: "device=0"      # docker/PCI order: the 3060
+  #    ctx: 16384
+  #    threads: 16
+  #    ttl: 0                # never evict
+  #    args: "--jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0"
+
 
 llama_swap_version: "253"
 llama_swap_sha256: 91f4d0af56cd5471d0133d6f89db7a7db118a9cd6f8ecd2bbdffd50aa29e5eb6

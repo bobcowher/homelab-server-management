@@ -5,9 +5,12 @@ healthCheckTimeout: {{ llama_swap_health_timeout | default(900) }}
 {% if llama_models | default([]) | length > 0 %}
 groups:
   # One exclusive, swapping group: at most ONE model holds VRAM at any time,
-  # and starting a second evicts the first. This box is primarily an RL
-  # machine that occasionally serves models, not the other way round, so
-  # inference is not allowed to accumulate resident weights across both cards.
+  # and starting a second evicts the first. The default model spans BOTH cards,
+  # so two resident models would not fit anyway.
+  #
+  # A persistent 3060-pinned model (see the commented example in vars.yml) must
+  # NOT join this group -- being evicted is exactly what an always-on model
+  # must not do. Give it its own group with swap: false when that day comes.
   gpu:
     swap: true
     exclusive: true
@@ -25,8 +28,9 @@ models:
     cmd: >
       docker run --rm --name llamacpp-{{ m.name }}
       --network host
-      --gpus '"device={{ m.device }}"'
+      --gpus '"{{ m.gpus }}"'
       -e LLAMA_CACHE=/models/hf-cache
+      -e CUDA_DEVICE_ORDER=PCI_BUS_ID
       -v {{ data_root }}/models:/models
       {{ llama_cpp_image }}
 {% if m.hf is defined %}
@@ -36,6 +40,12 @@ models:
 {% endif %}
       --host 127.0.0.1 --port ${PORT}
       -ngl {{ m.ngl | default(99) }}
+{% if m.split_mode is defined %}
+      -sm {{ m.split_mode }}
+{% endif %}
+{% if m.tensor_split is defined %}
+      -ts {{ m.tensor_split }}
+{% endif %}
 {% if m.n_cpu_moe is defined %}
       --n-cpu-moe {{ m.n_cpu_moe }}
 {% endif %}

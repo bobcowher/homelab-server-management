@@ -124,44 +124,66 @@ It sits directly on `:5000` rather than behind a Caddy subpath. It has no `Proxy
 
 ## Adding a model
 
-One place defines models: `roles/llama_swap/templates/config.yaml.j2`. llama-swap starts a backend on demand, proxies to it, and shuts it down after its TTL — so many models can be configured while only the one in use occupies VRAM.
+Models are declared in **`hosts/lab/vars.yml`** under `llama_models` — not in the template, which only renders them. llama-swap starts a backend on demand, proxies to it, and shuts it down after its TTL, so many models can be configured while only the one in use holds VRAM.
 
-### Know your GPUs before you pin
+### Know your GPUs before you place a model
 
-| Device | Card | VRAM | PCI | Good for |
+| Index | Card | VRAM | PCI |
+|---|---|---|---|
+| `0` | RTX 3060 | 12 GB | `04:00.0` |
+| `1` | RTX 3090 | 24 GB | `0A:00.0` |
+
+**Index 0 is the smaller card**, and that one numbering holds everywhere — `gpus`, `tensor_split`, and `nvidia-smi` all agree.
+
+> ⚠️ That agreement is *manufactured*, not natural. Left alone, CUDA orders devices fastest-first and calls the **3090** index 0 — the exact reverse. The role passes `-e CUDA_DEVICE_ORDER=PCI_BUS_ID` into each container to force PCI order. Remove that env var and every `tensor_split` silently inverts, quietly loading the big half of a model onto the small card. The `CUDA_DEVICE_ORDER` in the systemd unit does **not** cover this: it applies to the llama-swap process, and the model runs in a container with its own environment.
+
+### Three placements, measured
+
+Same prompt, same harness (`scripts/bench_model.sh`), 200 generated tokens, on the 19 GB Laguna Q4_K_M:
+
+| Placement | VRAM | Prompt | Generation | 3090 free for RL? |
 |---|---|---|---|---|
-| `0` | RTX 3060 | 12 GB | `04:00.0` | 7–8B at Q4, embeddings, draft models |
-| `1` | RTX 3090 | 24 GB | `0A:00.0` | 14B at Q4/Q5, 32B at low quant, training |
+| `gpus: all` | 18012 + 8747 | 409 tok/s | **150 tok/s** | no |
+| `gpus: device=1` + `n_cpu_moe: 20` | 16616 | 136 tok/s | 83 tok/s | no |
+| `gpus: device=0`, 16k ctx | 10779 | 65 tok/s | 60 tok/s | **yes** |
 
-> ⚠️ **Device 0 is the smaller card.** The 3060 sorts first by PCI bus ID, so the default "GPU 0" is the 12GB card. The llama-swap unit sets `CUDA_DEVICE_ORDER=PCI_BUS_ID` so the ordering is at least stable and explicit — but **always set `CUDA_VISIBLE_DEVICES` per model** rather than relying on a default. The cards are mismatched, so vLLM tensor parallelism cannot split one model across both.
+Spanning both cards nearly doubles generation, because nothing has to push expert weights across PCIe into system RAM. That is the default. `-sm layer` is *pipelined*, not parallel — it buys capacity, not parallel compute, which is why the split proportions matter.
 
-### 1. Put the weights on disk
+Pin to the 3060 only for a model that should sit resident and serve continuously. That is the one case where `ttl: 0` is allowed, and `verify.yml` enforces the pairing: a model may skip its eviction timer **only** if it is pinned to the small card, so nothing can ever squat on the 3090.
+
+### 1. Get the weights
+
+Prefer `hf:` and let llama.cpp download into the shared cache:
+
+```yaml
+hf: unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q6_K
+```
+
+Or place a file yourself, for weights you already have locally:
 
 ```bash
 # /data/models is group ml with setgid — new files stay group-readable
 scp mymodel-q4_k_m.gguf robertcowher@lab.local:/data/models/
 ```
 
-Or drop them in through File Browser at `lab.local/files/`, which writes as the `files` user into the same tree.
+File Browser at `lab.local/files/` writes as the `files` user into the same tree.
 
 ### 2. Declare it
 
-Edit `roles/llama_swap/templates/config.yaml.j2`. `${PORT}` is llama-swap's macro — it assigns a free loopback port per backend, so backends are never LAN-exposed:
+Add an entry to `llama_models` in `hosts/lab/vars.yml`. `${PORT}` is llama-swap's macro — it assigns a free loopback port per backend, so backends are never LAN-exposed.
 
 ```yaml
-models:
-  "qwen2.5-14b":
-    cmd: >
-      /usr/local/bin/llama-server
-      --model /data/models/qwen2.5-14b-instruct-q4_k_m.gguf
-      --port ${PORT}
-      --n-gpu-layers 99
-      --ctx-size 16384
-    proxy: "http://127.0.0.1:${PORT}"
-    env:
-      - "CUDA_VISIBLE_DEVICES=1"   # the 3090
-    ttl: 300                       # unload after 5 min idle
+  - name: my-model
+    hf: some-user/Some-Model-GGUF:Q6_K   # or: file: my-model-q4_k_m.gguf
+    gpus: all                            # all | device=0 (3060) | device=1 (3090)
+    split_mode: layer
+    tensor_split: "12,24"                # 3060,3090 — same order as nvidia-smi
+    ctx: 65536
+    threads: 16
+    args: "--jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0"
 ```
+
+`--jinja` is required for anything doing tool calls: it makes llama.cpp use the model's real chat template.
 
 ### 3. Apply and confirm
 
@@ -197,13 +219,51 @@ curl -s http://lab.local:8080/v1/models | jq '.data[].id'
 # a real completion
 curl -s http://lab.local:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
-  -d '{"model":"qwen2.5-14b","messages":[{"role":"user","content":"hi"}]}' \
+  -d '{"model":"qwen3-coder","messages":[{"role":"user","content":"hi"}]}' \
   | jq -r '.choices[0].message.content'
 ```
 
-The first request to an unloaded model blocks while llama-swap starts the backend — that's the swap working, not a hang. `healthCheckTimeout` (currently 300s) bounds the wait; raise it for large models on a cold cache.
+The first request to an unloaded model blocks while llama-swap starts the backend — that's the swap working, not a hang. `healthCheckTimeout` (currently 900s) bounds the wait; raise it for large models on a cold cache.
 
 Prefer `lab.local:8080` over a raw IP in anything you keep. mDNS resolves exactly one name — `webui.lab.local` and friends will **not** resolve without extra avahi configuration, which is why all web routing is path-based on the single host.
+
+### Freeing the GPU for a training run
+
+A loaded model holds its VRAM until it is unloaded. CUDA allocations are not preemptible: if a
+training run asks for memory llama.cpp is holding, the **training run** is what fails, with
+`CUDA_ERROR_OUT_OF_MEMORY`. llama.cpp is never asked to yield and never learns anything wanted the
+memory. Measured with laguna resident on the 3090 (16634 MiB held): a 20 GiB request failed, and
+five seconds later the model was still loaded and holding every byte.
+
+This matters more now that the default placement spans **both** cards — a loaded model puts weights
+on the 3090 *and* the 3060, so it is the whole box that is occupied, not one card.
+
+Before a large run, free the card by hand:
+
+```bash
+curl -s http://lab.local:8080/unload    # drops loaded models; VRAM returns to ~1 MiB
+nvidia-smi --query-gpu=index,memory.used --format=csv
+```
+
+Left alone, a model releases itself after its `ttl` (currently 900s idle). That is the intended
+default: this is an RL box that occasionally serves models, so the automatic path is to wait it
+out, and the command above is for when you would rather not.
+
+The failure is deferred, which is the part that bites. PyTorch grows its allocator pool on demand,
+so a run can start inside the leftover VRAM, train for an hour, and then die on a batch that
+spikes — or when llama-swap loads a *larger* model mid-run. If a run must not fail, unload first
+rather than trusting the headroom.
+
+To re-measure any of this, `scripts/vram_probe.py` asks for a given amount of VRAM on a given card
+and reports what the driver says. It uses `libcuda` directly, so it needs no torch — but it has to
+run on the host with the GPUs:
+
+```bash
+scp scripts/vram_probe.py lab:/tmp/
+ssh lab '/opt/conda/envs/py312/bin/python /tmp/vram_probe.py 1 20'   # device 1 = the 3090, 20 GiB
+```
+
+Exit code 2 means out of memory, 1 means any other CUDA failure.
 
 ---
 
@@ -382,6 +442,18 @@ which leaves a fixed argument sudoers can name exactly.
 ### 🟠 `deploy.sh` targets the wrong path
 
 It points at `/home/bobcowher/beekeeper`; this host installs to `/home/beekeeper/beekeeper`. Reconcile before relying on it.
+
+### 🟡 Inference and training contend for VRAM with no arbiter
+
+llama-swap arbitrates its own models against each other and knows nothing about training jobs;
+training jobs know nothing about it. Nothing coordinates the two — the manual path is
+[Freeing the GPU for a training run](#freeing-the-gpu-for-a-training-run).
+
+Automating it was considered and **deliberately deferred**. The obvious trigger, a Beekeeper
+job-start hook, would push a lab-specific VRAM policy into a public project that every other user
+would inherit; and "always unload before training" is not always the wanted behavior, since running
+a model and a training job side by side is sometimes the point. Revisit if a real run is ever lost
+to this. If it is automated, it belongs in a local job-launch wrapper, not upstream in Beekeeper.
 
 ### 🟡 Tailscale, TLS, and real hostnames
 

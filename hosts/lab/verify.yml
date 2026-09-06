@@ -725,22 +725,42 @@
       ansible.builtin.assert:
         that:
           - item.ttl | default(llama_swap_ttl_default) | int > 0
+            or item.gpus | default('') == 'device=0'
         fail_msg: >-
-          {{ item.name }} has no TTL. This box is primarily for RL; a model
-          without an eviction timer squats on VRAM indefinitely.
+          {{ item.name }} has no TTL and is not pinned to the 3060. This box is
+          primarily for RL: the 3090 must never be held indefinitely. A model
+          that should stay resident has to live on the 3060 (gpus: device=0),
+          which leaves the big card free for training.
       loop: "{{ llama_models }}"
       loop_control:
         label: "{{ item.name }}"
       tags: [llama_swap]
 
-    - name: Every model pins its GPU explicitly
+    - name: Every model states its GPU placement explicitly
       ansible.builtin.assert:
         that:
-          - item.device is defined
+          - item.gpus is defined
+          - item.gpus in ['all', 'device=0', 'device=1']
         fail_msg: >-
-          {{ item.name }} does not set `device`. The 3060 sorts first by PCI
-          bus ID, so an unpinned model lands on the 12GB card by default.
+          {{ item.name }} does not set a valid `gpus`. Use 'all' (both cards),
+          'device=0' (3060) or 'device=1' (3090) -- docker indexes by PCI bus
+          order, so device=0 is the SMALLER card. An unset value would let a
+          model land on the 12GB card by default.
       loop: "{{ llama_models }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [llama_swap]
+
+    - name: Every multi-GPU model sets its tensor split
+      ansible.builtin.assert:
+        that:
+          - item.tensor_split is defined
+        fail_msg: >-
+          {{ item.name }} spans both cards but sets no tensor_split. The
+          proportions are in the same order as `gpus` and nvidia-smi
+          (3060 first, 3090 second), because the container runs with
+          CUDA_DEVICE_ORDER=PCI_BUS_ID.
+      loop: "{{ llama_models | selectattr('gpus', 'eq', 'all') | list }}"
       loop_control:
         label: "{{ item.name }}"
       tags: [llama_swap]
