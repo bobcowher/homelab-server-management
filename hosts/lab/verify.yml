@@ -696,6 +696,55 @@
           did not finish cleanly, or a shutdown is pending.
       tags: [base]
 
+    - name: The backend image is present
+      ansible.builtin.command: "docker image inspect {{ llama_cpp_image }}"
+      become: true
+      register: backend_img
+      changed_when: false
+      tags: [llama_swap]
+
+    - name: llama-swap advertises every declared model
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:8080/v1/models"
+        return_content: true
+      register: adv
+      tags: [llama_swap]
+
+    - name: Every model in vars is served, and none hold VRAM at rest
+      ansible.builtin.assert:
+        that:
+          - >-
+            (adv.json.data | map(attribute='id') | sort)
+            == (llama_models | map(attribute='name') | sort)
+        fail_msg: >-
+          llama-swap serves {{ adv.json.data | map(attribute='id') | list }},
+          expected {{ llama_models | map(attribute='name') | list }}.
+      tags: [llama_swap]
+
+    - name: Models declare an eviction TTL
+      ansible.builtin.assert:
+        that:
+          - item.ttl | default(llama_swap_ttl_default) | int > 0
+        fail_msg: >-
+          {{ item.name }} has no TTL. This box is primarily for RL; a model
+          without an eviction timer squats on VRAM indefinitely.
+      loop: "{{ llama_models }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [llama_swap]
+
+    - name: Every model pins its GPU explicitly
+      ansible.builtin.assert:
+        that:
+          - item.device is defined
+        fail_msg: >-
+          {{ item.name }} does not set `device`. The 3060 sorts first by PCI
+          bus ID, so an unpinned model lands on the 12GB card by default.
+      loop: "{{ llama_models }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [llama_swap]
+
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
 # host pattern turns every assertion below into a silent pass. This play runs

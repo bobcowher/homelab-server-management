@@ -1,32 +1,56 @@
-# Managed by Ansible.
-#
-# Model definitions are deliberately empty. llama-swap starts and serves its
-# API with no models configured (`-validate` reports "0 model(s)"); adding
-# them is an operational step that depends on which weights are present under
-# {{ data_root }}/models.
-#
-# Each model must pin its device explicitly. This host has mismatched GPUs --
-# RTX 3060 12GB at PCI 04:00.0 and RTX 3090 24GB at 0A:00.0 -- so nothing can
-# be assumed about default placement, and vLLM tensor parallelism cannot split
-# a model across them at all.
-#
-# With CUDA_DEVICE_ORDER=PCI_BUS_ID set in the unit, device 0 is the 3060 and
-# device 1 is the 3090.
-#
-# Example shape:
-#
-# models:
-#   "qwen2.5-7b":
-#     cmd: >
-#       /usr/local/bin/llama-server
-#       --model {{ data_root }}/models/qwen2.5-7b-instruct-q4_k_m.gguf
-#       --port ${PORT}
-#       --n-gpu-layers 99
-#     proxy: "http://127.0.0.1:${PORT}"
-#     env:
-#       - "CUDA_VISIBLE_DEVICES=1"
-#     ttl: 300
+# Managed by Ansible. Generated from llama_models in hosts/lab/vars.yml --
+# edit there, not here.
+healthCheckTimeout: {{ llama_swap_health_timeout | default(900) }}
 
-healthCheckTimeout: 300
+{% if llama_models | default([]) | length > 0 %}
+groups:
+  # One exclusive, swapping group: at most ONE model holds VRAM at any time,
+  # and starting a second evicts the first. This box is primarily an RL
+  # machine that occasionally serves models, not the other way round, so
+  # inference is not allowed to accumulate resident weights across both cards.
+  gpu:
+    swap: true
+    exclusive: true
+    members:
+{% for m in llama_models %}
+      - "{{ m.name }}"
+{% endfor %}
 
+models:
+{% for m in llama_models %}
+  "{{ m.name }}":
+    # --network host with an explicit --host 127.0.0.1 keeps the backend on
+    # loopback: nothing is published, so there is no LAN exposure and nothing
+    # for the DOCKER-USER chain to filter.
+    cmd: >
+      docker run --rm --name llamacpp-{{ m.name }}
+      --network host
+      --gpus '"device={{ m.device }}"'
+      -e LLAMA_CACHE=/models/hf-cache
+      -v {{ data_root }}/models:/models
+      {{ llama_cpp_image }}
+{% if m.hf is defined %}
+      -hf {{ m.hf }}
+{% else %}
+      -m /models/{{ m.file }}
+{% endif %}
+      --host 127.0.0.1 --port ${PORT}
+      -ngl {{ m.ngl | default(99) }}
+{% if m.n_cpu_moe is defined %}
+      --n-cpu-moe {{ m.n_cpu_moe }}
+{% endif %}
+      -c {{ m.ctx | default(8192) }}
+      --threads {{ m.threads | default(8) }}
+      {{ m.args | default('') }}
+    # A bare `docker run` does not die cleanly on signal; without this the
+    # container outlives llama-swap's eviction and keeps holding VRAM.
+    cmdStop: docker stop llamacpp-{{ m.name }}
+    proxy: "http://127.0.0.1:${PORT}"
+    ttl: {{ m.ttl | default(llama_swap_ttl_default) }}
+{% endfor %}
+{% else %}
+
+# No models declared. llama-swap starts and serves with zero models; add
+# entries to llama_models in hosts/lab/vars.yml.
 models: {}
+{% endif %}

@@ -1,4 +1,30 @@
 ---
+- name: Create the Hugging Face model cache
+  ansible.builtin.file:
+    path: "{{ llama_cache_dir }}"
+    state: directory
+    owner: root
+    group: ml
+    # setgid so weights pulled by a backend stay group-readable
+    mode: "2775"
+
+# community.docker.docker_image fails here with "Not supported URL scheme
+# http+docker" -- the collection's Python SDK path is incompatible with the
+# requests/docker versions on 26.04. The CLI has no such dependency.
+- name: Check whether the backend image is present
+  ansible.builtin.command: "docker image inspect {{ llama_cpp_image }}"
+  register: llama_image_present
+  changed_when: false
+  failed_when: false
+
+- name: Pull the llama.cpp CUDA backend image
+  ansible.builtin.command: "docker pull {{ llama_cpp_image }}"
+  when: llama_image_present.rc != 0
+  changed_when: true
+  # llama-swap is only a proxy -- it starts and stops backends. Without this
+  # image there is nothing to serve, and the first request would fail on a
+  # cold pull inside the healthCheckTimeout window.
+
 - name: Create the config directory
   ansible.builtin.file:
     path: /etc/llama-swap
