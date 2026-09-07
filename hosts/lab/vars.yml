@@ -172,7 +172,9 @@ llama_models:
     gpus: "device=0"       # the 3060
     ctx: 32768
     threads: 16
-    ttl: 0                 # never evict; verify.yml allows this ONLY on the 3060
+    # Ages out on the normal idle timer like everything else. It stays in the
+    # `resident` group so a big model loading cannot evict it mid-conversation,
+    # but idle VRAM goes back to the box.
     group: resident
     args: "--jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0"
 
