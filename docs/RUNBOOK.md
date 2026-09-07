@@ -24,10 +24,11 @@ for convenience; if the two ever disagree, this one is right.
 4. [Adding a model](#adding-a-model)
 5. [Web search](#web-search)
 6. [Routine changes](#routine-changes)
-7. [Upgrades and holds](#upgrades-and-holds)
-8. [When it breaks](#when-it-breaks)
-9. [Handle with care](#handle-with-care)
-10. [Known gaps](#known-gaps)
+7. [Overnight power saving](#overnight-power-saving)
+8. [Upgrades and holds](#upgrades-and-holds)
+9. [When it breaks](#when-it-breaks)
+10. [Handle with care](#handle-with-care)
+11. [Known gaps](#known-gaps)
 
 ---
 
@@ -372,9 +373,89 @@ For a **native** service, add the port to the loop in `roles/firewall/tasks/main
 
 ---
 
+## Overnight power saving
+
+The box suspends to S3 when idle and wakes on an RTC alarm at 17:00, so expect
+it to be unreachable roughly midnight to 17:00. **A daytime "lab is down" is
+usually the schedule, not a fault.**
+
+The check runs hourly from 00:00 to 08:00 and suspends on the first pass where
+nothing has touched the box in the last hour. If it stays busy through the whole
+window it simply stays up for the day — it never suspends into the afternoon and
+wakes half an hour later.
+
+### Wake it early
+
+```bash
+scripts/wake_lab.py
+```
+
+Wake-on-LAN is armed on `enp5s0`. Measured at 12 seconds from packet to sshd
+answering. Run it from any machine on the LAN; the sender needs nothing installed.
+
+### Skip tonight
+
+```bash
+ssh robertcowher@lab.local 'touch /run/lab-no-suspend'
+```
+
+On `/run`, so it clears itself at the next boot. Forgetting to remove it costs
+one night, not every night.
+
+### Find out why it did or didn't suspend
+
+```bash
+ssh robertcowher@lab.local 'journalctl -u lab-idle-suspend -n 40'
+```
+
+Every run prints each signal and its verdict, on quiet nights and busy ones
+alike. To ask the same question now, without waiting for the timer:
+
+```bash
+ssh robertcowher@lab.local 'sudo /usr/local/sbin/lab-idle-suspend --dry-run'
+```
+
+`--dry-run` never suspends. Your own SSH session counts as a login session, so a
+dry-run you invoke by hand always reports at least one reason to stay awake.
+
+### What counts as "in use"
+
+| Signal | Window |
+|---|---|
+| CPU and load peak, via `sar` | last hour |
+| llama-swap inference requests | last hour |
+| Beekeeper training | now |
+| Processes holding a CUDA context | now |
+| Login sessions, via `loginctl` | now |
+| `/run/lab-no-suspend` | — |
+
+Any single one cancels the suspend, and anything the script cannot determine
+counts as activity. The bias is deliberate: a false suspend costs a training
+run, a needless wakeful night costs pennies.
+
+`sar` is the only signal with an hour of memory — every other one is
+instantaneous and would happily suspend a box whose run ended at 23:30. That is
+why `sysstat` collection is not optional here; without it the script refuses to
+suspend rather than guess.
+
+### Changing the schedule
+
+The `power_*` variables in `hosts/lab/vars.yml`. Set `power_suspend_enabled:
+false` to stop it without removing the role.
+
+**Never set `Persistent=true` on the timer.** systemd would replay every
+overnight run missed while the box was asleep, so it would suspend itself again
+the instant it woke at 17:00. `verify.yml` asserts this is off.
+
+---
+
 ## Upgrades and holds
 
-Sixteen packages are held: everything matching `nvidia*`, `libnvidia*`, `docker-ce*`, `containerd*`. Unattended-upgrades is scoped to security origins only.
+Sixteen packages are held: everything matching `nvidia*`, `libnvidia*`, `docker-ce*`, `containerd*`. Unattended-upgrades is scoped to security origins only — and since the box started suspending overnight, **its timer is masked and it no longer runs on its own**. Its 06:53 slot falls inside the suspend window with `Persistent=yes`, so on resume it would have installed updates and restarted the Docker and NVIDIA stacks at the exact moment the box was wanted. Security updates are now a deliberate act:
+
+```bash
+ssh robertcowher@lab.local 'sudo unattended-upgrade -v'
+```
 
 Both exist for the same reason: an automatic driver bump moves the userspace libraries out from under the loaded kernel module and breaks every GPU container, with no warning until something tries to use a GPU. The distro default allowed the full release pocket, which would have done exactly that.
 
