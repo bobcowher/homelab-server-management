@@ -185,3 +185,8 @@ llama_swap_sha256: 91f4d0af56cd5471d0133d6f89db7a7db118a9cd6f8ecd2bbdffd50aa29e5
 # branch to avoid the two fighting. Change here if that ever moves to main.
 beekeeper_branch: develop
 beekeeper_home: /home/beekeeper/beekeeper
+
+# TensorBoard, one per training run, on the first free port at or above 6006.
+# The firewall opens this range to the LAN. Beekeeper itself scans as far as
+# 6105, so this is a deliberate cap rather than a mirror of what it can use.
+tensorboard_port_range: "6006:6016"

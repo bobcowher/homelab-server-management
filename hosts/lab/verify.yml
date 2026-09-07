@@ -288,6 +288,10 @@
           - ufwst.stdout is search('22')
           - ufwst.stdout is search('8080')
           - ufwst.stdout is search('5000')
+          # The per-run TensorBoard range. Asserted as the range ufw actually
+          # prints, not just '6006', so a rule that opened a single port would
+          # fail here rather than pass and then strand the second run.
+          - ufwst.stdout is search(tensorboard_port_range | regex_escape)
         fail_msg: "ufw is not in the expected state:\n{{ ufwst.stdout }}"
       tags: [firewall]
 

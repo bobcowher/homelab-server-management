@@ -23,6 +23,22 @@
     - "8080"   # llama-swap
     - "5000"   # beekeeper
 
+# Beekeeper starts a TensorBoard for each training run and assigns it the
+# first free port it finds, scanning upward from 6006. These are per-run and
+# short-lived, so they cannot be enumerated the way 5000 and 8080 can.
+#
+# Beekeeper's scan runs to 6105, so this range is deliberately narrower than
+# what it can hand out. A twelfth concurrent TensorBoard would bind a port
+# outside the range and go quietly unreachable -- it starts, the UI links to
+# it, and the browser hangs -- but eleven at once on a two-GPU box is already
+# well past normal. Widen both ends together if that ever stops being true.
+- name: Allow the per-run TensorBoard ports from the LAN
+  community.general.ufw:
+    rule: allow
+    port: "{{ tensorboard_port_range }}"
+    proto: tcp
+    src: "{{ lan_subnet }}"
+
 # Containers reaching llama-swap on the host arrive with a Docker bridge
 # source address, not a LAN one, so the lan_subnet rule above does not cover
 # them and default-deny drops the traffic. Open WebUI talks to llama-swap over
