@@ -18,6 +18,9 @@
     - { role: llama_swap, tags: [llama_swap] }
     - { role: webstack, tags: [webstack] }
     - { role: beekeeper, tags: [beekeeper] }
+    # Last: the idle check reads llama-swap's journal and beekeeper's API, so
+    # both should be in their final state before it is installed and dry-run.
+    - { role: power, tags: [power] }
 
 # Verification runs automatically after every apply. `changed=0` proves the
 # tasks ran without redoing work; it does not prove the host is correct. These

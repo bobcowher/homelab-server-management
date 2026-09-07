@@ -1,0 +1,241 @@
+#!/bin/bash
+# Managed by Ansible. See roles/power/tasks/main.yml.
+#
+# Decides whether the box may suspend overnight, and if so arms an RTC alarm
+# and goes down. Run hourly across the overnight window by the matching timer.
+#
+# The bias throughout is toward STAYING UP. A false suspend costs a work
+# session -- a training run killed, an SSH session dropped, a model reloaded
+# from cold. A needless wakeful night costs a few cents of idle draw. So every
+# check below is a veto: any single one reporting activity cancels the suspend,
+# and anything this script cannot determine counts as activity.
+#
+# Run with --dry-run to print the verdict and every signal without acting.
+set -uo pipefail
+
+WAKE_TIME="{{ power_wake_time }}"
+IDLE_MINUTES={{ power_idle_window_minutes }}
+LOAD_MAX="{{ power_idle_load_max }}"
+CPU_MAX="{{ power_idle_cpu_max }}"
+OVERRIDE_FLAG="{{ power_override_flag }}"
+SYSSTAT_DIR="{{ power_sysstat_dir }}"
+BEEKEEPER_URL="{{ power_beekeeper_url }}"
+LLAMA_SWAP_UNIT="{{ power_llama_swap_unit }}"
+
+DRY_RUN=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+    DRY_RUN=1
+elif [[ -n "${1:-}" ]]; then
+    echo "usage: ${0##*/} [--dry-run]" >&2
+    exit 2
+fi
+
+# Every signal that reports activity appends here. Empty at the end means the
+# box may suspend.
+#
+# n_reasons is maintained alongside the array rather than read back with bash's
+# array-length syntax. That syntax pairs a brace with a hash, and Ansible
+# renders this file through Jinja, where that pair opens a comment -- the
+# template fails with "Missing end of comment tag" and never installs.
+reasons=()
+n_reasons=0
+veto() {
+    reasons+=("$1")
+    n_reasons=$(( n_reasons + 1 ))
+}
+
+# Printed for every signal whether or not it vetoes, so the journal shows the
+# whole picture on a night that did not suspend AND on one that did.
+report() { printf '  %-24s %s\n' "$1" "$2"; }
+
+now_epoch=$(date +%s)
+start_epoch=$(( now_epoch - IDLE_MINUTES * 60 ))
+
+# --- sysstat history --------------------------------------------------------
+#
+# sysstat already samples every 10 minutes, so the last hour of CPU and load is
+# on disk with nothing new to install. It is also the ONLY signal here with a
+# memory: everything else is instantaneous and would happily suspend a box
+# whose training run ended at 23:30.
+#
+# Two traps this handles:
+#
+#   * S_TIME_FORMAT=ISO is mandatory. Without it sar prints "12:10:09 AM" in
+#     this locale -- an extra field that shifts every column right by one, so
+#     reading ldavg-5 positionally silently returns ldavg-1 instead.
+#   * At midnight the last hour reaches into YESTERDAY's saDD file. sar cannot
+#     span two files in one call, so the window is read as two.
+sar_window() {
+    local flag="$1"
+    local start_day now_day
+    start_day=$(date -d "@${start_epoch}" +%d)
+    now_day=$(date -d "@${now_epoch}" +%d)
+
+    if [[ "$start_day" != "$now_day" ]]; then
+        S_TIME_FORMAT=ISO sar "$flag" -f "${SYSSTAT_DIR}/sa${start_day}" \
+            -s "$(date -d "@${start_epoch}" +%H:%M:%S)" 2>/dev/null
+        S_TIME_FORMAT=ISO sar "$flag" -f "${SYSSTAT_DIR}/sa${now_day}" \
+            -s 00:00:00 2>/dev/null
+    else
+        S_TIME_FORMAT=ISO sar "$flag" -f "${SYSSTAT_DIR}/sa${now_day}" \
+            -s "$(date -d "@${start_epoch}" +%H:%M:%S)" 2>/dev/null
+    fi
+}
+
+# Data rows only: an ISO timestamp in $1. Drops the banner, the column header
+# and the trailing "Average:" line, which would otherwise be parsed as data.
+sar_data() { awk '$1 ~ /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]$/'; }
+
+load_rows=$(sar_window -q | sar_data)
+cpu_rows=$(sar_window -u | sar_data)
+
+if [[ -z "$load_rows" || -z "$cpu_rows" ]]; then
+    # No history at all: a fresh boot, a wiped /var/log/sysstat, or a broken
+    # collector. Unknown is not idle -- a box that came up ten minutes ago has
+    # no business suspending on the strength of no evidence.
+    report "cpu/load history" "NO DATA in last ${IDLE_MINUTES}m"
+    veto "no sysstat history for the last ${IDLE_MINUTES} minutes"
+else
+    # Peak, not mean. A twenty-minute run inside a sixty-minute window averages
+    # down to nothing; its peak stays visible.
+    max_load=$(awk 'BEGIN{m=0} {if ($5+0 > m) m=$5+0} END{printf "%.2f", m}' <<<"$load_rows")
+    max_cpu=$(awk 'BEGIN{m=0} $2=="all" {u=$3+$5; if (u > m) m=u} END{printf "%.2f", m}' <<<"$cpu_rows")
+
+    report "peak ldavg-5 (${IDLE_MINUTES}m)" "${max_load} (max ${LOAD_MAX})"
+    report "peak cpu% (${IDLE_MINUTES}m)" "${max_cpu} (max ${CPU_MAX})"
+
+    awk -v v="$max_load" -v t="$LOAD_MAX" 'BEGIN{exit !(v > t)}' \
+        && veto "5-minute load peaked at ${max_load}, above ${LOAD_MAX}"
+    awk -v v="$max_cpu" -v t="$CPU_MAX" 'BEGIN{exit !(v > t)}' \
+        && veto "CPU peaked at ${max_cpu}%, above ${CPU_MAX}%"
+fi
+
+# --- LLM inference in the window --------------------------------------------
+#
+# Load alone misses this. A chat that finished at 23:45 leaves the box idle by
+# midnight, and llama-swap unloads the model on its own TTL, so neither load
+# nor VRAM remembers it happened. The request log does.
+#
+# Matched narrowly on inference paths. /v1/models is deliberately excluded --
+# the verify playbook and assorted health checks poll it, and counting those
+# would keep the box awake on its own monitoring.
+llm_hits=$(journalctl -u "$LLAMA_SWAP_UNIT" --since "-${IDLE_MINUTES}min" \
+    --no-pager -q 2>/dev/null \
+    | grep -cE '"(POST|GET) /v1/(chat/completions|completions|embeddings)' )
+report "llama-swap inference" "${llm_hits} request(s) in ${IDLE_MINUTES}m"
+[[ "$llm_hits" -gt 0 ]] && veto "${llm_hits} LLM inference request(s) in the last ${IDLE_MINUTES} minutes"
+
+# --- Beekeeper --------------------------------------------------------------
+#
+# Authoritative for beekeeper-managed runs, and catches a run that is between
+# phases -- checkpointing or evaluating -- where load can briefly read low.
+#
+# An unreachable API is treated as NOT active, which is the one place this
+# script does not fail toward staying up. The reasoning: if beekeeper is down
+# it is not starting anything, and a run that outlived a service restart
+# (process_manager uses start_new_session, so training survives one) still
+# shows up in the load and GPU checks above and below.
+bk_json=$(curl -fsS --max-time 5 "$BEEKEEPER_URL" 2>/dev/null)
+if [[ -z "$bk_json" ]]; then
+    report "beekeeper" "unreachable (not treated as active)"
+elif [[ "$(jq -r '.data.busy // false' <<<"$bk_json" 2>/dev/null)" == "true" ]]; then
+    bk_projects=$(jq -r '(.data.running_projects // []) | join(", ")' <<<"$bk_json" 2>/dev/null)
+    report "beekeeper" "BUSY (${bk_projects:-unnamed})"
+    veto "beekeeper is training: ${bk_projects:-unnamed}"
+else
+    report "beekeeper" "idle"
+fi
+
+# --- GPU ---------------------------------------------------------------------
+#
+# Catches CUDA work started outside beekeeper entirely -- a script run by hand
+# in tmux, a notebook -- which no API on this box would ever report.
+gpu_procs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c '[0-9]')
+report "gpu compute processes" "${gpu_procs}"
+[[ "$gpu_procs" -gt 0 ]] && veto "${gpu_procs} process(es) holding a CUDA context"
+
+# --- Login sessions ----------------------------------------------------------
+#
+# Someone is at a terminal. Suspending would drop the connection and kill any
+# foreground work that is not under tmux.
+#
+# NOT `who`. Ubuntu 26.04 no longer writes utmp, so `who` returns nothing even
+# for a live interactive SSH session with a PTY -- this check would have looked
+# correct and silently never fired. loginctl is the systemd-native registry and
+# is the only source here that actually sees a session.
+#
+# Class=manager is excluded deliberately: that is the per-user systemd manager
+# (user@UID.service), which outlives the login that started it and would
+# otherwise pin the box awake permanently after a single SSH.
+#
+# Class is read per session rather than by column position, because
+# `list-sessions` column order has changed between systemd releases.
+#
+# Ansible's own connection counts as a session, so a --dry-run during a deploy
+# always reports at least one. That is expected and harmless: when the timer
+# actually fires overnight, nothing is connected unless someone really is.
+sessions=0
+for sid in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
+    if [[ "$(loginctl show-session "$sid" -p Class --value 2>/dev/null)" == "user" ]]; then
+        sessions=$(( sessions + 1 ))
+    fi
+done
+report "login sessions" "${sessions}"
+[[ "$sessions" -gt 0 ]] && veto "${sessions} login session(s) open"
+
+# --- Manual override ---------------------------------------------------------
+#
+# Lives on /run, so it clears itself on the next boot. Forgetting to remove it
+# costs one night, not every night.
+if [[ -e "$OVERRIDE_FLAG" ]]; then
+    report "manual override" "PRESENT (${OVERRIDE_FLAG})"
+    veto "manual override flag ${OVERRIDE_FLAG} is present"
+else
+    report "manual override" "absent"
+fi
+
+# --- Verdict -----------------------------------------------------------------
+
+if (( n_reasons > 0 )); then
+    echo "Staying awake. ${n_reasons} signal(s) report activity:"
+    printf '  - %s\n' "${reasons[@]}"
+    exit 0
+fi
+
+wake_epoch=$(date -d "today ${WAKE_TIME}" +%s)
+if (( wake_epoch <= now_epoch )); then
+    # Only reachable if the suspend window is ever widened past the wake time.
+    # Suspending with an alarm already in the past means never waking on the
+    # RTC at all, so refuse rather than strand the box.
+    echo "Refusing to suspend: wake time ${WAKE_TIME} has already passed today." >&2
+    exit 1
+fi
+
+echo "Idle on every signal. Suspending until $(date -d "@${wake_epoch}" '+%F %T %Z')."
+
+if (( DRY_RUN )); then
+    echo "(--dry-run: not arming the alarm and not suspending)"
+    exit 0
+fi
+
+# -m no arms the alarm WITHOUT sleeping, and that distinction is load-bearing.
+# rtcwake -m mem writes straight to /sys/power/state and bypasses systemd's
+# sleep target, so nvidia-suspend.service never runs -- and with
+# NVreg_PreserveVideoMemoryAllocations=2 set on this box, that unit is exactly
+# what saves and restores VRAM across S3. Arming here and letting systemd do
+# the sleep keeps the driver's own hooks in the path.
+#
+# -u because this box keeps the RTC in UTC (timedatectl: "RTC in local TZ: no").
+if ! rtcwake -m no -u -t "$wake_epoch"; then
+    echo "Failed to arm the RTC alarm. Not suspending." >&2
+    exit 1
+fi
+
+if ! systemctl suspend; then
+    # An inhibitor lock or a logind failure. Disarm rather than leave an alarm
+    # pending on a box that stayed up -- it would fire as a spurious wakeup
+    # event this script never asked for.
+    echo "systemctl suspend failed. Disarming the RTC alarm." >&2
+    echo 0 > /sys/class/rtc/rtc0/wakealarm || true
+    exit 1
+fi

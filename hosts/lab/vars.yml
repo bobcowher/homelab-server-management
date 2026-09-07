@@ -190,3 +190,41 @@ beekeeper_home: /home/beekeeper/beekeeper
 # The firewall opens this range to the LAN. Beekeeper itself scans as far as
 # 6105, so this is a deliberate cap rather than a mirror of what it can use.
 tensorboard_port_range: "6006:6016"
+
+# --- Overnight power management ---------------------------------------------
+#
+# The box suspends to S3 overnight and wakes on an RTC alarm. Set
+# power_suspend_enabled to false to stop the timer without removing the role.
+power_suspend_enabled: true
+
+# Hourly retry window. The first check at 00:00 is usually the one that fires;
+# the rest exist so a run still going at midnight only delays the suspend
+# instead of cancelling the whole night. After the window closes the box stays
+# up until tomorrow -- deliberately, so it can never suspend into the afternoon
+# and wake half an hour later.
+power_suspend_window: "00..08"
+power_wake_time: "17:00"
+
+# How far back "recent use" reaches. sysstat samples every 10 minutes, so this
+# is the real resolution of the CPU and load history.
+power_idle_window_minutes: 60
+
+# Idle on this box measures ldavg-5 at 0.00-0.02 and CPU at ~0.05%. These sit
+# roughly 25x and 100x above that floor: high enough that docker health checks
+# and a nightly logrotate do not trip them, low enough that no real training or
+# inference could hide underneath.
+power_idle_load_max: "0.50"
+power_idle_cpu_max: "5.0"
+
+# `touch` this to skip tonight's suspend. On /run, so it clears itself at the
+# next boot -- forgetting to remove it costs one night, not every night.
+power_override_flag: /run/lab-no-suspend
+
+power_sysstat_dir: /var/log/sysstat
+power_beekeeper_url: "http://127.0.0.1:5000/api/v1/busy"
+power_llama_swap_unit: llama-swap
+
+# Wake-on-LAN, the only remote way into the box between the suspend and the
+# alarm. enp6s0f1 is the second, unused port -- arming the wrong one would look
+# correct in config and never wake anything.
+power_wol_interface: enp5s0

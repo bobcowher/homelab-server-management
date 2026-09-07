@@ -1,0 +1,15 @@
+[Unit]
+Description=Hourly overnight idle check for suspending the lab
+
+[Timer]
+OnCalendar=*-*-* {{ power_suspend_window }}:00:00
+
+# Persistent MUST stay false. With it on, systemd would replay every overnight
+# run missed while the box was asleep -- so the moment it woke at
+# {{ power_wake_time }} it would run the midnight check and suspend itself
+# again. The window closing without a suspend is the intended outcome on a busy
+# night, not a missed job to catch up on.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

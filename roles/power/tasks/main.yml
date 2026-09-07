@@ -1,0 +1,113 @@
+---
+# sysstat is the only signal in the idle check with a MEMORY of the last hour.
+# Everything else -- load average, GPU processes, beekeeper's busy flag -- is
+# instantaneous and would happily suspend a box whose training run ended at
+# 23:30. Without the collector running there is no history, and the script
+# refuses to suspend rather than guess.
+- name: Install sysstat for the activity history the idle check reads
+  ansible.builtin.apt:
+    name: sysstat
+    state: present
+    cache_valid_time: 3600
+
+# Ubuntu ships sysstat with collection DISABLED by default via this file. The
+# package being installed is not enough; without ENABLED="true" the saDD files
+# are never written and sar reports "Cannot open /var/log/sysstat/saNN".
+- name: Enable sysstat data collection
+  ansible.builtin.lineinfile:
+    path: /etc/default/sysstat
+    regexp: '^ENABLED='
+    line: 'ENABLED="true"'
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart sysstat
+
+- name: Start the sysstat collector timers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - sysstat-collect.timer
+    - sysstat-summary.timer
+
+- name: Install the idle-suspend decision script
+  ansible.builtin.template:
+    src: lab-idle-suspend.sh.j2
+    dest: /usr/local/sbin/lab-idle-suspend
+    owner: root
+    group: root
+    mode: "0755"
+    # Catches a Jinja variable that renders to something the shell rejects
+    # before it can be installed and fire at midnight against a sleeping admin.
+    validate: /bin/bash -n %s
+
+- name: Install the idle-suspend unit
+  ansible.builtin.template:
+    src: lab-idle-suspend.service.j2
+    dest: /etc/systemd/system/lab-idle-suspend.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart lab-idle-suspend timer
+
+- name: Install the idle-suspend timer
+  ansible.builtin.template:
+    src: lab-idle-suspend.timer.j2
+    dest: /etc/systemd/system/lab-idle-suspend.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart lab-idle-suspend timer
+
+- name: Enable the overnight idle check
+  ansible.builtin.systemd_service:
+    name: lab-idle-suspend.timer
+    enabled: "{{ power_suspend_enabled }}"
+    state: "{{ 'started' if power_suspend_enabled else 'stopped' }}"
+    daemon_reload: true
+
+# unattended-upgrades is scheduled at 06:53, squarely inside the suspend
+# window, and its timer is Persistent=yes. Left alone it would install security
+# updates and restart services -- docker, the nvidia driver stack -- at the
+# instant the box wakes at {{ power_wake_time }}, which is exactly when it is
+# wanted. Masked rather than disabled so an apt upgrade of the package cannot
+# quietly re-enable it. Upgrades happen on demand instead.
+- name: Mask the unattended-upgrade timer so it cannot fire on resume
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    masked: true
+  loop:
+    - apt-daily-upgrade.timer
+    - apt-daily-upgrade.service
+
+# --- Wake-on-LAN ------------------------------------------------------------
+#
+# The only remote way into the box between the suspend and the {{ power_wake_time }}
+# alarm. Without it a box that went down at midnight is unreachable until
+# evening and the only recovery is the physical power button.
+
+- name: Keep Wake-on-LAN armed across reboots
+  ansible.builtin.template:
+    src: wol.link.j2
+    dest: "/etc/systemd/network/10-wol-{{ power_wol_interface }}.link"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Read the current Wake-on-LAN mode
+  ansible.builtin.command: "ethtool {{ power_wol_interface }}"
+  register: power_ethtool
+  changed_when: false
+
+# The .link file above only takes effect when udev next processes the device,
+# which in practice means the next reboot. Setting it directly closes that gap.
+# Deliberately NOT done with `udevadm trigger`, which re-runs the full rule set
+# against a live interface on a box only reachable over that interface.
+- name: Arm Wake-on-LAN now, without waiting for a reboot
+  ansible.builtin.command: "ethtool -s {{ power_wol_interface }} wol g"
+  when: "power_ethtool.stdout is not search('Wake-on: g')"
+  changed_when: true

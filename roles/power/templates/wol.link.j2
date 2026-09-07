@@ -1,0 +1,13 @@
+# Managed by Ansible. See roles/power/tasks/main.yml.
+#
+# Keeps Wake-on-LAN armed across reboots. `ethtool -s ... wol g` applies
+# immediately but is lost on the next boot, and this box is netplan +
+# systemd-networkd, so a .link file is where the setting belongs.
+#
+# Matched on the kernel's original name rather than the MAC, so replacing the
+# NIC does not silently disarm the only remote way into a suspended box.
+[Match]
+OriginalName={{ power_wol_interface }}
+
+[Link]
+WakeOnLan=magic

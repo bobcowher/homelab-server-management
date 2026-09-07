@@ -794,6 +794,120 @@
         label: "{{ item.name }}"
       tags: [llama_swap]
 
+
+    - name: Read the idle-suspend timer state
+      ansible.builtin.command: >-
+        systemctl show lab-idle-suspend.timer
+        -p LoadState -p ActiveState -p UnitFileState -p Persistent
+      register: pw_timer
+      changed_when: false
+      become: true
+      tags: [power]
+
+    - name: The overnight idle check is armed
+      ansible.builtin.assert:
+        that:
+          - "'LoadState=loaded' in pw_timer.stdout"
+          - "'ActiveState=active' in pw_timer.stdout"
+          - "'UnitFileState=enabled' in pw_timer.stdout"
+        fail_msg: >-
+          lab-idle-suspend.timer is not loaded, enabled and active:
+          {{ pw_timer.stdout }}
+      when: power_suspend_enabled | bool
+      tags: [power]
+
+    # Asserted explicitly because Persistent=yes is the one setting that turns
+    # this feature against itself: systemd would replay the missed overnight
+    # runs the moment the box woke, and it would suspend itself again at
+    # {{ power_wake_time }}. The default is no, so this catches a hand edit.
+    - name: The idle timer does not replay missed runs on resume
+      ansible.builtin.assert:
+        that:
+          - "'Persistent=no' in pw_timer.stdout"
+        fail_msg: >-
+          lab-idle-suspend.timer has Persistent set. On waking at
+          {{ power_wake_time }} systemd would immediately replay the midnight
+          check and suspend the box again.
+      tags: [power]
+
+    - name: Read the idle-suspend script
+      ansible.builtin.stat:
+        path: /usr/local/sbin/lab-idle-suspend
+      register: pw_script
+      tags: [power]
+
+    - name: The idle-suspend script is installed and executable
+      ansible.builtin.assert:
+        that:
+          - pw_script.stat.exists
+          - pw_script.stat.mode == '0755'
+        fail_msg: "/usr/local/sbin/lab-idle-suspend is missing or not executable"
+      tags: [power]
+
+    # The strongest check available without actually suspending: runs every
+    # signal against the live box and exits 0 only if the whole decision path
+    # works. A broken sar invocation or a missing jq fails here rather than at
+    # midnight.
+    - name: The idle check runs cleanly end to end
+      ansible.builtin.command: /usr/local/sbin/lab-idle-suspend --dry-run
+      register: pw_dryrun
+      changed_when: false
+      become: true
+      tags: [power]
+
+    - name: The idle check reached a verdict on every signal
+      ansible.builtin.assert:
+        that:
+          - pw_dryrun.stdout is search('llama-swap inference')
+          - pw_dryrun.stdout is search('beekeeper')
+          - pw_dryrun.stdout is search('gpu compute processes')
+          - pw_dryrun.stdout is search('login sessions')
+          # A NO DATA reading means sysstat is not collecting, which silently
+          # removes the only signal with an hour of memory.
+          - pw_dryrun.stdout is not search('NO DATA')
+        fail_msg: "The idle check did not evaluate every signal:\n{{ pw_dryrun.stdout }}"
+      tags: [power]
+
+    - name: Read the unattended-upgrade timer state
+      ansible.builtin.command: systemctl show apt-daily-upgrade.timer -p UnitFileState
+      register: pw_uu
+      changed_when: false
+      become: true
+      tags: [power]
+
+    # Masked, not merely disabled. Its schedule falls inside the suspend window
+    # and its timer is Persistent=yes, so unmasked it would install updates and
+    # restart the docker and NVIDIA stacks at the exact moment the box wakes.
+    - name: The unattended-upgrade timer cannot fire on resume
+      ansible.builtin.assert:
+        that:
+          - "'UnitFileState=masked' in pw_uu.stdout"
+        fail_msg: >-
+          apt-daily-upgrade.timer is not masked ({{ pw_uu.stdout }}). It would
+          fire on resume at {{ power_wake_time }} and restart services under a
+          running workload.
+      tags: [power]
+
+    - name: Read the Wake-on-LAN mode
+      ansible.builtin.command: "ethtool {{ power_wol_interface }}"
+      register: pw_wol
+      changed_when: false
+      become: true
+      tags: [power]
+
+    # Between the suspend and the RTC alarm this is the only remote way in.
+    # Asserted on the live interface, not on the .link file, because a .link
+    # that udev never applied looks identical on disk to one that worked.
+    - name: Wake-on-LAN is armed on the live interface
+      ansible.builtin.assert:
+        that:
+          - "pw_wol.stdout is search('Wake-on: g')"
+        fail_msg: >-
+          Wake-on-LAN is not armed on {{ power_wol_interface }}. A box that
+          suspends at midnight would be unreachable until {{ power_wake_time }}
+          with no remote recovery.
+      tags: [power]
+
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
 # host pattern turns every assertion below into a silent pass. This play runs
