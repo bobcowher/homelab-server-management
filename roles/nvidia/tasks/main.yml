@@ -7,6 +7,34 @@
     # running kernel. Only the userspace utilities were missing (spec 2, 4).
     # Verified by dry-run before first apply: one Inst, zero Remv.
 
+# The -server driver branch is compute-only: it ships no graphics stack, so
+# there is no libEGL and no EGL vendor ICD. Anything rendering headlessly on the
+# GPU -- MuJoCo with MUJOCO_GL=egl, which is how the behaviour-cloning envs
+# produce frames -- fails outright without these.
+#
+# libnvidia-gl supplies libEGL_nvidia and /usr/share/glvnd/egl_vendor.d, and
+# libegl1 supplies the libglvnd dispatch layer that loads it. The version is
+# pinned to the running driver: a mismatch between the GL libraries and the
+# kernel module fails at initialisation rather than at install.
+- name: Find the installed driver version
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Install EGL for headless GPU rendering
+  ansible.builtin.apt:
+    name:
+      # Pinned to the driver actually installed rather than a literal. The GL
+      # libraries and the kernel module must be the same version or EGL fails
+      # at initialisation, and this way a driver upgrade cannot silently leave
+      # them mismatched.
+      - "libnvidia-gl-{{ nvidia_driver_branch }}={{ nvidia_installed_version }}"
+      - libegl1
+      - libgles2
+    state: present
+  vars:
+    nvidia_installed_version: >-
+      {{ ansible_facts.packages['libnvidia-compute-' ~ nvidia_driver_branch][0].version }}
+
 - name: Create the apt keyring directory
   ansible.builtin.file:
     path: /etc/apt/keyrings

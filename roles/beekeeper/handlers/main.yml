@@ -1,0 +1,6 @@
+---
+- name: Restart beekeeper
+  ansible.builtin.systemd_service:
+    name: beekeeper
+    state: restarted
+    daemon_reload: true

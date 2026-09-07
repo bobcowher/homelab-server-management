@@ -42,6 +42,34 @@
   # does not rebuild the environment every time.
   when: bk_checkout.changed or not bk_venv.stat.exists
 
+# A drop-in rather than an edit to the unit itself: setup.sh writes
+# beekeeper.service from its own template on every deploy, so anything added to
+# the main unit would be silently reverted the next time deploy.sh runs.
+#
+# This host has no display. Without MUJOCO_GL, MuJoCo defaults to GLFW, asks
+# X11 for a DISPLAY that does not exist, and every run that renders a frame
+# dies on import. Training jobs are children of this service, so they inherit
+# it.
+- name: Install the beekeeper service drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/beekeeper.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Point MuJoCo at EGL for headless rendering
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/beekeeper.service.d/10-headless-rendering.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible. See roles/beekeeper/tasks/main.yml.
+      [Service]
+      Environment=MUJOCO_GL=egl
+  notify: Restart beekeeper
+
 - name: Ensure the service is enabled and running
   ansible.builtin.systemd_service:
     name: beekeeper
