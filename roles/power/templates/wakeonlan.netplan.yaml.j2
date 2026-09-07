@@ -1,0 +1,18 @@
+# Managed by Ansible. See roles/power/tasks/main.yml.
+#
+# Wake-on-LAN belongs to netplan on this box, not to a hand-written .link file.
+#
+# netplan renders its own /run/systemd/network/10-netplan-{{ power_wol_interface }}.link
+# containing "WakeOnLan=off", and udev applies exactly ONE .link file per device
+# -- the first match in lexicographic order. A file at
+# /etc/systemd/network/10-wol-*.link therefore loses the sort to netplan's and
+# is never read, while netplan actively disarms the NIC on every boot.
+#
+# Overriding here instead. netplan merges this into the installer's definition
+# of the interface, so DHCP and set-name survive untouched; the role verifies
+# that in the rendered .network rather than trusting it.
+network:
+  version: 2
+  ethernets:
+    {{ power_wol_interface }}:
+      wakeonlan: true

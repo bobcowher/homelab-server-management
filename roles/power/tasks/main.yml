@@ -90,23 +90,67 @@
 # alarm. Without it a box that went down at midnight is unreachable until
 # evening and the only recovery is the physical power button.
 
-- name: Keep Wake-on-LAN armed across reboots
+# Shipped 2026-09-07, never worked, removed the same day: netplan's own
+# generated .link sorts first, wins the single-file-per-device race, and sets
+# WakeOnLan=off. Left here as a removal so existing hosts get it cleaned up.
+- name: Remove the ineffective .link file netplan always overrode
+  ansible.builtin.file:
+    path: "/etc/systemd/network/10-wol-{{ power_wol_interface }}.link"
+    state: absent
+
+- name: Keep Wake-on-LAN armed across reboots, via netplan
   ansible.builtin.template:
-    src: wol.link.j2
-    dest: "/etc/systemd/network/10-wol-{{ power_wol_interface }}.link"
+    src: wakeonlan.netplan.yaml.j2
+    dest: /etc/netplan/90-wakeonlan.yaml
     owner: root
     group: root
-    mode: "0644"
+    # netplan warns loudly about world-readable configuration.
+    mode: "0600"
+  notify: Regenerate netplan
+
+# Render now rather than on the handler alone, so the assertions below read the
+# real generated state on a first run too. `generate` only writes /run; it does
+# not touch the live interface, so there is no chance of dropping the link on a
+# box reachable only over it. `netplan apply` is deliberately never called.
+- name: Render the netplan configuration
+  ansible.builtin.command: netplan generate
+  changed_when: false
+
+- name: Read the generated link and network configuration
+  ansible.builtin.slurp:
+    src: "/run/systemd/network/10-netplan-{{ power_wol_interface }}.{{ item }}"
+  register: power_netplan_rendered
+  loop: [link, network]
+
+# The merge is the risky part: a netplan override that REPLACED the installer's
+# stanza instead of merging into it would silently drop DHCP, and the box would
+# come up with no address on the next reboot with nobody able to reach it.
+- name: The netplan override armed WoL without dropping DHCP
+  ansible.builtin.assert:
+    that:
+      - "'WakeOnLan=magic' in (power_netplan_rendered.results[0].content | b64decode)"
+      - "'DHCP=ipv4' in (power_netplan_rendered.results[1].content | b64decode)"
+    fail_msg: >-
+      The netplan override did not render as expected. WoL armed:
+      {{ 'WakeOnLan=magic' in (power_netplan_rendered.results[0].content | b64decode) }},
+      DHCP intact:
+      {{ 'DHCP=ipv4' in (power_netplan_rendered.results[1].content | b64decode) }}.
+      Remove /etc/netplan/90-wakeonlan.yaml and re-run `netplan generate`
+      before rebooting -- a missing DHCP stanza means no network on next boot.
 
 - name: Read the current Wake-on-LAN mode
   ansible.builtin.command: "ethtool {{ power_wol_interface }}"
   register: power_ethtool
   changed_when: false
 
-# The .link file above only takes effect when udev next processes the device,
-# which in practice means the next reboot. Setting it directly closes that gap.
-# Deliberately NOT done with `udevadm trigger`, which re-runs the full rule set
-# against a live interface on a box only reachable over that interface.
+# The netplan setting above only takes effect when udev next processes the
+# device, which in practice means the next reboot. Setting it directly closes
+# that gap for the current boot. Deliberately NOT `udevadm trigger`, which
+# re-runs the full rule set against a live interface on a box only reachable
+# over that interface.
+#
+# This is a supplement to the netplan override, never a substitute: on its own
+# it made a broken configuration look armed until the next reboot disarmed it.
 - name: Arm Wake-on-LAN now, without waiting for a reboot
   ansible.builtin.command: "ethtool -s {{ power_wol_interface }} wol g"
   when: "power_ethtool.stdout is not search('Wake-on: g')"

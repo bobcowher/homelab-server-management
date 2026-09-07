@@ -193,9 +193,28 @@ tensorboard_port_range: "6006:6016"
 
 # --- Overnight power management ---------------------------------------------
 #
-# The box suspends to S3 overnight and wakes on an RTC alarm. Set
-# power_suspend_enabled to false to stop the timer without removing the role.
-power_suspend_enabled: true
+# The box suspends to S3 overnight and wakes on an RTC alarm.
+#
+# DISABLED 2026-09-07 after suspending with live VRAM corrupted both GPUs.
+# A manual suspend with 8.3GB resident on the 3060 produced, eight minutes
+# later on the next CUDA context creation:
+#
+#   NVRM: Xid 31, MMU Fault: ENGINE CE2_PBDMA0
+#   NVRM: uvm encountered global fatal error 0x60, requiring os reboot
+#   NVRM: Xid 154, GPU recovery action -> 0x2 (Node Reboot Required)
+#
+# Both cards needed a reboot; a training run crashed on the poisoned state.
+# An earlier cycle with IDLE GPUs was clean, so the suspect is the driver's
+# VRAM save/restore under PreserveVideoMemoryAllocations=2, not S3 itself.
+#
+# The idle check already vetoes on a live CUDA context and would have refused
+# that suspend -- it was triggered by hand, bypassing the check. That is a
+# reason to think the design is sound, NOT evidence that it is: the damage was
+# latent and only surfaced on the next context creation, so any soak test has
+# to allocate on both cards after every resume, not just confirm the box booted.
+#
+# Do not set this back to true without that soak.
+power_suspend_enabled: false
 
 # Hourly retry window. The first check at 00:00 is usually the one that fires;
 # the rest exist so a run still going at midnight only delays the suspend

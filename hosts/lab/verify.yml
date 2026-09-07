@@ -896,8 +896,6 @@
       tags: [power]
 
     # Between the suspend and the RTC alarm this is the only remote way in.
-    # Asserted on the live interface, not on the .link file, because a .link
-    # that udev never applied looks identical on disk to one that worked.
     - name: Wake-on-LAN is armed on the live interface
       ansible.builtin.assert:
         that:
@@ -906,6 +904,31 @@
           Wake-on-LAN is not armed on {{ power_wol_interface }}. A box that
           suspends at midnight would be unreachable until {{ power_wake_time }}
           with no remote recovery.
+      tags: [power]
+
+    - name: Read the generated netplan link configuration
+      ansible.builtin.slurp:
+        src: "/run/systemd/network/10-netplan-{{ power_wol_interface }}.link"
+      become: true
+      register: pw_link
+      tags: [power]
+
+    # The live check above is NOT sufficient on its own, and this exists
+    # because relying on it shipped a broken feature on 2026-09-07. The role
+    # runs `ethtool -s ... wol g` for the current boot, so the interface reads
+    # armed the moment it is deployed -- while netplan's own generated .link
+    # still said WakeOnLan=off and disarmed the NIC on the very next reboot.
+    #
+    # Live state proves it works now; the rendered file proves it survives a
+    # reboot. A suspend feature needs both, so assert both.
+    - name: Wake-on-LAN survives a reboot
+      ansible.builtin.assert:
+        that:
+          - "'WakeOnLan=magic' in (pw_link.content | b64decode)"
+        fail_msg: >-
+          netplan renders WakeOnLan=off for {{ power_wol_interface }}, so the
+          NIC will be disarmed on the next reboot no matter what ethtool
+          reports right now. Check /etc/netplan/90-wakeonlan.yaml.
       tags: [power]
 
 # ansible-playbook exits 0 when a play matches no hosts. For a verification

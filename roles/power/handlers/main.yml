@@ -9,3 +9,7 @@
   ansible.builtin.systemd_service:
     name: sysstat
     state: restarted
+
+- name: Regenerate netplan
+  ansible.builtin.command: netplan generate
+  changed_when: true
