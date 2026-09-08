@@ -1,5 +1,5 @@
 [Unit]
-Description=Suspend the lab overnight if nothing has used it recently
+Description=Power off the lab overnight if nothing has used it recently
 # The decision reads llama-swap's journal and beekeeper's API, so both should
 # have settled before this runs. Neither is required -- the script treats an
 # unreachable beekeeper as idle and an empty journal as zero requests -- so
@@ -8,7 +8,7 @@ After=llama-swap.service beekeeper.service network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/lab-idle-suspend
-# The script calls `systemctl suspend`, which returns as soon as logind has
+ExecStart=/usr/local/sbin/lab-idle-shutdown
+# The script calls `systemctl poweroff`, which returns as soon as logind has
 # queued the job rather than blocking until the machine is down. This unit
-# therefore exits normally on the way into S3.
+# therefore exits normally on the way out.

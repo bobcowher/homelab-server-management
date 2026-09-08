@@ -1,8 +1,12 @@
 ---
-- name: Restart lab-idle-suspend timer
+# Guarded on power_shutdown_enabled. Without the guard this handler starts the
+# timer whatever the variable says: handlers run AFTER tasks, so it undoes the
+# `stopped` state the enable task just set and leaves a feature that is
+# disabled in config actively armed to power the box off at midnight.
+- name: Restart lab-idle-shutdown timer
   ansible.builtin.systemd_service:
-    name: lab-idle-suspend.timer
-    state: restarted
+    name: lab-idle-shutdown.timer
+    state: "{{ 'restarted' if power_shutdown_enabled | bool else 'stopped' }}"
     daemon_reload: true
 
 - name: Restart sysstat
@@ -10,6 +14,6 @@
     name: sysstat
     state: restarted
 
-- name: Regenerate netplan
-  ansible.builtin.command: netplan generate
-  changed_when: true
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true

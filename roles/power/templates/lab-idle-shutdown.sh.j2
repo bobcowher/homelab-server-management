@@ -1,19 +1,27 @@
 #!/bin/bash
 # Managed by Ansible. See roles/power/tasks/main.yml.
 #
-# Decides whether the box may suspend overnight, and if so arms an RTC alarm
-# and goes down. Run hourly across the overnight window by the matching timer.
+# Decides whether the box may power off overnight, and does it. Run hourly
+# across the overnight window by the matching timer.
 #
-# The bias throughout is toward STAYING UP. A false suspend costs a work
-# session -- a training run killed, an SSH session dropped, a model reloaded
-# from cold. A needless wakeful night costs a few cents of idle draw. So every
-# check below is a veto: any single one reporting activity cancels the suspend,
-# and anything this script cannot determine counts as activity.
+# Powers OFF rather than suspending. Suspending to S3 with live VRAM corrupted
+# both GPUs on 2026-09-07 -- Xid 31, then Xid 154 "Node Reboot Required" --
+# because the driver saves and restores VRAM across S3 under
+# NVreg_PreserveVideoMemoryAllocations=2. A cold boot reinitialises the driver
+# from nothing, so that failure class cannot occur here. It also draws less
+# than S3, and there is no RTC alarm to arm, no UTC conversion to get wrong,
+# and no BIOS wake feature to depend on. The box comes back when someone
+# presses the button.
+#
+# The bias throughout is toward STAYING UP. A false shutdown costs a work
+# session -- a training run killed, an SSH session dropped. A needless wakeful
+# night costs a few cents of idle draw. So every check below is a veto: any
+# single one reporting activity cancels the shutdown, and anything this script
+# cannot determine counts as activity.
 #
 # Run with --dry-run to print the verdict and every signal without acting.
 set -uo pipefail
 
-WAKE_TIME="{{ power_wake_time }}"
 IDLE_MINUTES={{ power_idle_window_minutes }}
 LOAD_MAX="{{ power_idle_load_max }}"
 CPU_MAX="{{ power_idle_cpu_max }}"
@@ -31,7 +39,7 @@ elif [[ -n "${1:-}" ]]; then
 fi
 
 # Every signal that reports activity appends here. Empty at the end means the
-# box may suspend.
+# box may power off.
 #
 # n_reasons is maintained alongside the array rather than read back with bash's
 # array-length syntax. That syntax pairs a brace with a hash, and Ansible
@@ -45,7 +53,7 @@ veto() {
 }
 
 # Printed for every signal whether or not it vetoes, so the journal shows the
-# whole picture on a night that did not suspend AND on one that did.
+# whole picture on a night that stayed up AND on one that went down.
 report() { printf '  %-24s %s\n' "$1" "$2"; }
 
 now_epoch=$(date +%s)
@@ -55,7 +63,7 @@ start_epoch=$(( now_epoch - IDLE_MINUTES * 60 ))
 #
 # sysstat already samples every 10 minutes, so the last hour of CPU and load is
 # on disk with nothing new to install. It is also the ONLY signal here with a
-# memory: everything else is instantaneous and would happily suspend a box
+# memory: everything else is instantaneous and would happily power off a box
 # whose training run ended at 23:30.
 #
 # Two traps this handles:
@@ -92,7 +100,7 @@ cpu_rows=$(sar_window -u | sar_data)
 if [[ -z "$load_rows" || -z "$cpu_rows" ]]; then
     # No history at all: a fresh boot, a wiped /var/log/sysstat, or a broken
     # collector. Unknown is not idle -- a box that came up ten minutes ago has
-    # no business suspending on the strength of no evidence.
+    # no business powering off on the strength of no evidence.
     report "cpu/load history" "NO DATA in last ${IDLE_MINUTES}m"
     veto "no sysstat history for the last ${IDLE_MINUTES} minutes"
 else
@@ -197,45 +205,23 @@ fi
 # --- Verdict -----------------------------------------------------------------
 
 if (( n_reasons > 0 )); then
-    echo "Staying awake. ${n_reasons} signal(s) report activity:"
+    echo "Staying up. ${n_reasons} signal(s) report activity:"
     printf '  - %s\n' "${reasons[@]}"
     exit 0
 fi
 
-wake_epoch=$(date -d "today ${WAKE_TIME}" +%s)
-if (( wake_epoch <= now_epoch )); then
-    # Only reachable if the suspend window is ever widened past the wake time.
-    # Suspending with an alarm already in the past means never waking on the
-    # RTC at all, so refuse rather than strand the box.
-    echo "Refusing to suspend: wake time ${WAKE_TIME} has already passed today." >&2
-    exit 1
-fi
-
-echo "Idle on every signal. Suspending until $(date -d "@${wake_epoch}" '+%F %T %Z')."
+echo "Idle on every signal. Powering off."
 
 if (( DRY_RUN )); then
-    echo "(--dry-run: not arming the alarm and not suspending)"
+    echo "(--dry-run: not powering off)"
     exit 0
 fi
 
-# -m no arms the alarm WITHOUT sleeping, and that distinction is load-bearing.
-# rtcwake -m mem writes straight to /sys/power/state and bypasses systemd's
-# sleep target, so nvidia-suspend.service never runs -- and with
-# NVreg_PreserveVideoMemoryAllocations=2 set on this box, that unit is exactly
-# what saves and restores VRAM across S3. Arming here and letting systemd do
-# the sleep keeps the driver's own hooks in the path.
-#
-# -u because this box keeps the RTC in UTC (timedatectl: "RTC in local TZ: no").
-if ! rtcwake -m no -u -t "$wake_epoch"; then
-    echo "Failed to arm the RTC alarm. Not suspending." >&2
-    exit 1
-fi
-
-if ! systemctl suspend; then
-    # An inhibitor lock or a logind failure. Disarm rather than leave an alarm
-    # pending on a box that stayed up -- it would fire as a spurious wakeup
-    # event this script never asked for.
-    echo "systemctl suspend failed. Disarming the RTC alarm." >&2
-    echo 0 > /sys/class/rtc/rtc0/wakealarm || true
+# systemctl rather than `poweroff` or `shutdown -h`, so units stop in
+# dependency order and containers get a real SIGTERM instead of losing power
+# mid-write. It returns once logind has queued the job, so this script exits
+# normally on the way down.
+if ! systemctl poweroff; then
+    echo "systemctl poweroff failed. Still up." >&2
     exit 1
 fi

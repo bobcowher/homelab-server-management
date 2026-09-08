@@ -1,0 +1,15 @@
+[Unit]
+Description=Hourly overnight idle check for powering off the lab
+
+[Timer]
+OnCalendar=*-*-* {{ power_shutdown_window }}:00:00
+
+# Persistent MUST stay false. With it on, systemd would replay every overnight
+# run missed while the box was off -- so the moment it was switched back on it
+# would run the midnight check and power itself straight down again. The window
+# closing without a shutdown is the intended outcome on a busy night, not a
+# missed job to catch up on.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

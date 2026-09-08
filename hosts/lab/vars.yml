@@ -193,36 +193,34 @@ tensorboard_port_range: "6006:6016"
 
 # --- Overnight power management ---------------------------------------------
 #
-# The box suspends to S3 overnight and wakes on an RTC alarm.
+# The box POWERS OFF overnight when nothing has used it recently, and stays off
+# until someone presses the button. There is no scheduled wake.
 #
-# DISABLED 2026-09-07 after suspending with live VRAM corrupted both GPUs.
-# A manual suspend with 8.3GB resident on the 3060 produced, eight minutes
-# later on the next CUDA context creation:
+# It suspended to S3 with an RTC wake for about two hours on 2026-09-07, until
+# a suspend with 8.3GB resident on the 3060 corrupted both GPUs. Eight minutes
+# later, on the next CUDA context creation:
 #
 #   NVRM: Xid 31, MMU Fault: ENGINE CE2_PBDMA0
 #   NVRM: uvm encountered global fatal error 0x60, requiring os reboot
 #   NVRM: Xid 154, GPU recovery action -> 0x2 (Node Reboot Required)
 #
-# Both cards needed a reboot; a training run crashed on the poisoned state.
-# An earlier cycle with IDLE GPUs was clean, so the suspect is the driver's
-# VRAM save/restore under PreserveVideoMemoryAllocations=2, not S3 itself.
+# Both cards needed a reboot and a training run crashed on the poisoned state.
+# A cycle with idle GPUs was clean, so the suspect is the driver's VRAM
+# save/restore under PreserveVideoMemoryAllocations=2 rather than S3 itself.
 #
-# The idle check already vetoes on a live CUDA context and would have refused
-# that suspend -- it was triggered by hand, bypassing the check. That is a
-# reason to think the design is sound, NOT evidence that it is: the damage was
-# latent and only surfaced on the next context creation, so any soak test has
-# to allocate on both cards after every resume, not just confirm the box booted.
+# Powering off sidesteps the whole class: a cold boot reinitialises the driver
+# from nothing, so there is no saved VRAM to restore incorrectly. It also drops
+# the RTC alarm, its UTC conversion, and the dependency on a BIOS wake feature.
+# The wake was only ever worth having if it was free, and it was not.
 #
-# Do not set this back to true without that soak.
-power_suspend_enabled: false
+# Still false pending one real end-to-end shutdown test.
+power_shutdown_enabled: false
 
-# Hourly retry window. The first check at 00:00 is usually the one that fires;
-# the rest exist so a run still going at midnight only delays the suspend
-# instead of cancelling the whole night. After the window closes the box stays
-# up until tomorrow -- deliberately, so it can never suspend into the afternoon
-# and wake half an hour later.
-power_suspend_window: "00..08"
-power_wake_time: "17:00"
+# Hourly retry window. The check at 00:00 is usually the one that fires; the
+# rest exist so a run still going at midnight only delays the shutdown instead
+# of cancelling the whole night. After the window closes the box stays up until
+# tomorrow -- deliberately, so it can never power off in the afternoon.
+power_shutdown_window: "00..08"
 
 # How far back "recent use" reaches. sysstat samples every 10 minutes, so this
 # is the real resolution of the CPU and load history.
@@ -235,15 +233,10 @@ power_idle_window_minutes: 60
 power_idle_load_max: "0.50"
 power_idle_cpu_max: "5.0"
 
-# `touch` this to skip tonight's suspend. On /run, so it clears itself at the
+# `touch` this to skip tonight's shutdown. On /run, so it clears itself at the
 # next boot -- forgetting to remove it costs one night, not every night.
 power_override_flag: /run/lab-no-suspend
 
 power_sysstat_dir: /var/log/sysstat
 power_beekeeper_url: "http://127.0.0.1:5000/api/v1/busy"
 power_llama_swap_unit: llama-swap
-
-# Wake-on-LAN, the only remote way into the box between the suspend and the
-# alarm. enp6s0f1 is the second, unused port -- arming the wrong one would look
-# correct in config and never wake anything.
-power_wol_interface: enp5s0

@@ -797,7 +797,7 @@
 
     - name: Read the idle-suspend timer state
       ansible.builtin.command: >-
-        systemctl show lab-idle-suspend.timer
+        systemctl show lab-idle-shutdown.timer
         -p LoadState -p ActiveState -p UnitFileState -p Persistent
       register: pw_timer
       changed_when: false
@@ -811,28 +811,43 @@
           - "'ActiveState=active' in pw_timer.stdout"
           - "'UnitFileState=enabled' in pw_timer.stdout"
         fail_msg: >-
-          lab-idle-suspend.timer is not loaded, enabled and active:
+          lab-idle-shutdown.timer is not loaded, enabled and active:
           {{ pw_timer.stdout }}
-      when: power_suspend_enabled | bool
+      when: power_shutdown_enabled | bool
+      tags: [power]
+
+    # The inverse assertion, and it exists because its absence hid a live bug:
+    # with the feature disabled the check above simply skipped, so a timer left
+    # ACTIVE by a handler that ran after the stop task passed verification
+    # while armed to power the box off at midnight. "Disabled" has to be
+    # asserted as positively as "enabled".
+    - name: A disabled idle check is actually stopped
+      ansible.builtin.assert:
+        that:
+          - "'ActiveState=inactive' in pw_timer.stdout"
+          - "'UnitFileState=enabled' not in pw_timer.stdout"
+        fail_msg: >-
+          power_shutdown_enabled is false but lab-idle-shutdown.timer is still
+          running: {{ pw_timer.stdout }}. It will power the box off tonight.
+      when: not (power_shutdown_enabled | bool)
       tags: [power]
 
     # Asserted explicitly because Persistent=yes is the one setting that turns
-    # this feature against itself: systemd would replay the missed overnight
-    # runs the moment the box woke, and it would suspend itself again at
-    # {{ power_wake_time }}. The default is no, so this catches a hand edit.
-    - name: The idle timer does not replay missed runs on resume
+    # this feature against itself: systemd would replay the overnight runs
+    # missed while the box was off, so switching it back on would power it
+    # straight down again. The default is no, so this catches a hand edit.
+    - name: The idle timer does not replay missed runs at boot
       ansible.builtin.assert:
         that:
           - "'Persistent=no' in pw_timer.stdout"
         fail_msg: >-
-          lab-idle-suspend.timer has Persistent set. On waking at
-          {{ power_wake_time }} systemd would immediately replay the midnight
-          check and suspend the box again.
+          lab-idle-shutdown.timer has Persistent set. Switching the box on
+          would immediately replay the midnight check and power it off again.
       tags: [power]
 
     - name: Read the idle-suspend script
       ansible.builtin.stat:
-        path: /usr/local/sbin/lab-idle-suspend
+        path: /usr/local/sbin/lab-idle-shutdown
       register: pw_script
       tags: [power]
 
@@ -841,7 +856,7 @@
         that:
           - pw_script.stat.exists
           - pw_script.stat.mode == '0755'
-        fail_msg: "/usr/local/sbin/lab-idle-suspend is missing or not executable"
+        fail_msg: "/usr/local/sbin/lab-idle-shutdown is missing or not executable"
       tags: [power]
 
     # The strongest check available without actually suspending: runs every
@@ -849,7 +864,7 @@
     # works. A broken sar invocation or a missing jq fails here rather than at
     # midnight.
     - name: The idle check runs cleanly end to end
-      ansible.builtin.command: /usr/local/sbin/lab-idle-suspend --dry-run
+      ansible.builtin.command: /usr/local/sbin/lab-idle-shutdown --dry-run
       register: pw_dryrun
       changed_when: false
       become: true
@@ -878,57 +893,14 @@
     # Masked, not merely disabled. Its schedule falls inside the suspend window
     # and its timer is Persistent=yes, so unmasked it would install updates and
     # restart the docker and NVIDIA stacks at the exact moment the box wakes.
-    - name: The unattended-upgrade timer cannot fire on resume
+    - name: The unattended-upgrade timer cannot fire at boot
       ansible.builtin.assert:
         that:
           - "'UnitFileState=masked' in pw_uu.stdout"
         fail_msg: >-
           apt-daily-upgrade.timer is not masked ({{ pw_uu.stdout }}). It would
-          fire on resume at {{ power_wake_time }} and restart services under a
-          running workload.
-      tags: [power]
-
-    - name: Read the Wake-on-LAN mode
-      ansible.builtin.command: "ethtool {{ power_wol_interface }}"
-      register: pw_wol
-      changed_when: false
-      become: true
-      tags: [power]
-
-    # Between the suspend and the RTC alarm this is the only remote way in.
-    - name: Wake-on-LAN is armed on the live interface
-      ansible.builtin.assert:
-        that:
-          - "pw_wol.stdout is search('Wake-on: g')"
-        fail_msg: >-
-          Wake-on-LAN is not armed on {{ power_wol_interface }}. A box that
-          suspends at midnight would be unreachable until {{ power_wake_time }}
-          with no remote recovery.
-      tags: [power]
-
-    - name: Read the generated netplan link configuration
-      ansible.builtin.slurp:
-        src: "/run/systemd/network/10-netplan-{{ power_wol_interface }}.link"
-      become: true
-      register: pw_link
-      tags: [power]
-
-    # The live check above is NOT sufficient on its own, and this exists
-    # because relying on it shipped a broken feature on 2026-09-07. The role
-    # runs `ethtool -s ... wol g` for the current boot, so the interface reads
-    # armed the moment it is deployed -- while netplan's own generated .link
-    # still said WakeOnLan=off and disarmed the NIC on the very next reboot.
-    #
-    # Live state proves it works now; the rendered file proves it survives a
-    # reboot. A suspend feature needs both, so assert both.
-    - name: Wake-on-LAN survives a reboot
-      ansible.builtin.assert:
-        that:
-          - "'WakeOnLan=magic' in (pw_link.content | b64decode)"
-        fail_msg: >-
-          netplan renders WakeOnLan=off for {{ power_wol_interface }}, so the
-          NIC will be disarmed on the next reboot no matter what ethtool
-          reports right now. Check /etc/netplan/90-wakeonlan.yaml.
+          fire in the first minutes after the box is switched on and restart
+          services under a running workload.
       tags: [power]
 
 # ansible-playbook exits 0 when a play matches no hosts. For a verification

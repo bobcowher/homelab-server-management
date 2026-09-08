@@ -32,10 +32,53 @@
     - sysstat-collect.timer
     - sysstat-summary.timer
 
-- name: Install the idle-suspend decision script
+# Artifacts from two superseded versions of this role, both from 2026-09-07.
+#
+# lab-idle-suspend*: the role suspended to S3 with an RTC wake before a suspend
+# with live VRAM corrupted both GPUs. "suspend" in the name would now describe
+# something the box never does.
+#
+# The Wake-on-LAN files: WoL was the remote escape hatch while the box merely
+# slept. It is gone because the box now powers off completely, and a magic
+# packet provably does not wake this board from S5 -- tested, no response in
+# 100s. Keeping it would have meant a passing verify assertion for something
+# that cannot work in the only state the box is ever in.
+- name: Stop the superseded idle-suspend units
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  failed_when: false
+  loop:
+    - lab-idle-suspend.timer
+    - lab-idle-suspend.service
+
+- name: Remove superseded power-management files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/lab-idle-suspend.timer
+    - /etc/systemd/system/lab-idle-suspend.service
+    - /usr/local/sbin/lab-idle-suspend
+    - /etc/systemd/network/10-wol-enp5s0.link
+    - /etc/netplan/90-wakeonlan.yaml
+  register: power_cleanup
+  notify: Reload systemd
+
+# Removing the netplan override only reverts to the installer's own definition
+# of the interface, so this cannot leave the box without an address. Run
+# unconditionally so the rendered state matches the config even if the file was
+# removed by hand. `generate` writes /run only -- `netplan apply` is never
+# called on a box reachable solely over the interface being reconfigured.
+- name: Re-render netplan after removing the WoL override
+  ansible.builtin.command: netplan generate
+  changed_when: false
+
+- name: Install the idle-shutdown decision script
   ansible.builtin.template:
-    src: lab-idle-suspend.sh.j2
-    dest: /usr/local/sbin/lab-idle-suspend
+    src: lab-idle-shutdown.sh.j2
+    dest: /usr/local/sbin/lab-idle-shutdown
     owner: root
     group: root
     mode: "0755"
@@ -43,38 +86,38 @@
     # before it can be installed and fire at midnight against a sleeping admin.
     validate: /bin/bash -n %s
 
-- name: Install the idle-suspend unit
+- name: Install the idle-shutdown unit
   ansible.builtin.template:
-    src: lab-idle-suspend.service.j2
-    dest: /etc/systemd/system/lab-idle-suspend.service
+    src: lab-idle-shutdown.service.j2
+    dest: /etc/systemd/system/lab-idle-shutdown.service
     owner: root
     group: root
     mode: "0644"
-  notify: Restart lab-idle-suspend timer
+  notify: Restart lab-idle-shutdown timer
 
-- name: Install the idle-suspend timer
+- name: Install the idle-shutdown timer
   ansible.builtin.template:
-    src: lab-idle-suspend.timer.j2
-    dest: /etc/systemd/system/lab-idle-suspend.timer
+    src: lab-idle-shutdown.timer.j2
+    dest: /etc/systemd/system/lab-idle-shutdown.timer
     owner: root
     group: root
     mode: "0644"
-  notify: Restart lab-idle-suspend timer
+  notify: Restart lab-idle-shutdown timer
 
 - name: Enable the overnight idle check
   ansible.builtin.systemd_service:
-    name: lab-idle-suspend.timer
-    enabled: "{{ power_suspend_enabled }}"
-    state: "{{ 'started' if power_suspend_enabled else 'stopped' }}"
+    name: lab-idle-shutdown.timer
+    enabled: "{{ power_shutdown_enabled }}"
+    state: "{{ 'started' if power_shutdown_enabled else 'stopped' }}"
     daemon_reload: true
 
-# unattended-upgrades is scheduled at 06:53, squarely inside the suspend
+# unattended-upgrades is scheduled at 06:53, squarely inside the shutdown
 # window, and its timer is Persistent=yes. Left alone it would install security
-# updates and restart services -- docker, the nvidia driver stack -- at the
-# instant the box wakes at {{ power_wake_time }}, which is exactly when it is
+# updates and restart services -- docker, the nvidia driver stack -- during the
+# first minutes after the box is switched back on, which is exactly when it is
 # wanted. Masked rather than disabled so an apt upgrade of the package cannot
 # quietly re-enable it. Upgrades happen on demand instead.
-- name: Mask the unattended-upgrade timer so it cannot fire on resume
+- name: Mask the unattended-upgrade timer so it cannot fire at boot
   ansible.builtin.systemd_service:
     name: "{{ item }}"
     enabled: false
@@ -83,75 +126,3 @@
   loop:
     - apt-daily-upgrade.timer
     - apt-daily-upgrade.service
-
-# --- Wake-on-LAN ------------------------------------------------------------
-#
-# The only remote way into the box between the suspend and the {{ power_wake_time }}
-# alarm. Without it a box that went down at midnight is unreachable until
-# evening and the only recovery is the physical power button.
-
-# Shipped 2026-09-07, never worked, removed the same day: netplan's own
-# generated .link sorts first, wins the single-file-per-device race, and sets
-# WakeOnLan=off. Left here as a removal so existing hosts get it cleaned up.
-- name: Remove the ineffective .link file netplan always overrode
-  ansible.builtin.file:
-    path: "/etc/systemd/network/10-wol-{{ power_wol_interface }}.link"
-    state: absent
-
-- name: Keep Wake-on-LAN armed across reboots, via netplan
-  ansible.builtin.template:
-    src: wakeonlan.netplan.yaml.j2
-    dest: /etc/netplan/90-wakeonlan.yaml
-    owner: root
-    group: root
-    # netplan warns loudly about world-readable configuration.
-    mode: "0600"
-  notify: Regenerate netplan
-
-# Render now rather than on the handler alone, so the assertions below read the
-# real generated state on a first run too. `generate` only writes /run; it does
-# not touch the live interface, so there is no chance of dropping the link on a
-# box reachable only over it. `netplan apply` is deliberately never called.
-- name: Render the netplan configuration
-  ansible.builtin.command: netplan generate
-  changed_when: false
-
-- name: Read the generated link and network configuration
-  ansible.builtin.slurp:
-    src: "/run/systemd/network/10-netplan-{{ power_wol_interface }}.{{ item }}"
-  register: power_netplan_rendered
-  loop: [link, network]
-
-# The merge is the risky part: a netplan override that REPLACED the installer's
-# stanza instead of merging into it would silently drop DHCP, and the box would
-# come up with no address on the next reboot with nobody able to reach it.
-- name: The netplan override armed WoL without dropping DHCP
-  ansible.builtin.assert:
-    that:
-      - "'WakeOnLan=magic' in (power_netplan_rendered.results[0].content | b64decode)"
-      - "'DHCP=ipv4' in (power_netplan_rendered.results[1].content | b64decode)"
-    fail_msg: >-
-      The netplan override did not render as expected. WoL armed:
-      {{ 'WakeOnLan=magic' in (power_netplan_rendered.results[0].content | b64decode) }},
-      DHCP intact:
-      {{ 'DHCP=ipv4' in (power_netplan_rendered.results[1].content | b64decode) }}.
-      Remove /etc/netplan/90-wakeonlan.yaml and re-run `netplan generate`
-      before rebooting -- a missing DHCP stanza means no network on next boot.
-
-- name: Read the current Wake-on-LAN mode
-  ansible.builtin.command: "ethtool {{ power_wol_interface }}"
-  register: power_ethtool
-  changed_when: false
-
-# The netplan setting above only takes effect when udev next processes the
-# device, which in practice means the next reboot. Setting it directly closes
-# that gap for the current boot. Deliberately NOT `udevadm trigger`, which
-# re-runs the full rule set against a live interface on a box only reachable
-# over that interface.
-#
-# This is a supplement to the netplan override, never a substitute: on its own
-# it made a broken configuration look armed until the next reboot disarmed it.
-- name: Arm Wake-on-LAN now, without waiting for a reboot
-  ansible.builtin.command: "ethtool -s {{ power_wol_interface }} wol g"
-  when: "power_ethtool.stdout is not search('Wake-on: g')"
-  changed_when: true

@@ -375,23 +375,35 @@ For a **native** service, add the port to the loop in `roles/firewall/tasks/main
 
 ## Overnight power saving
 
-The box suspends to S3 when idle and wakes on an RTC alarm at 17:00, so expect
-it to be unreachable roughly midnight to 17:00. **A daytime "lab is down" is
-usually the schedule, not a fault.**
+The box **powers itself off** overnight when nothing has used it recently, and
+stays off until you press the power button. There is no scheduled wake.
 
-The check runs hourly from 00:00 to 08:00 and suspends on the first pass where
+The check runs hourly from 00:00 to 08:00 and shuts down on the first pass where
 nothing has touched the box in the last hour. If it stays busy through the whole
-window it simply stays up for the day — it never suspends into the afternoon and
-wakes half an hour later.
+window it simply stays up for the day.
 
-### Wake it early
+### Why it powers off rather than suspending
 
-```bash
-scripts/wake_lab.py
+It suspended to S3 with a 17:00 RTC wake for about two hours on 2026-09-07,
+until a suspend with 8.3GB resident on the 3060 corrupted both GPUs:
+
+```
+NVRM: Xid 31, MMU Fault: ENGINE CE2_PBDMA0
+NVRM: uvm encountered global fatal error 0x60, requiring os reboot to recover
+NVRM: Xid 154, GPU recovery action changed to 0x2 (Node Reboot Required)
 ```
 
-Wake-on-LAN is armed on `enp5s0`. Measured at 12 seconds from packet to sshd
-answering. Run it from any machine on the LAN; the sender needs nothing installed.
+Both cards needed a reboot and a training run crashed on the poisoned state. A
+cycle with idle GPUs was clean, so the suspect is the driver's VRAM save/restore
+under `PreserveVideoMemoryAllocations=2` rather than S3 itself.
+
+A cold boot reinitialises the driver from nothing, so that failure cannot occur.
+Powering off also draws less than S3 and removes the RTC alarm, its UTC
+conversion, and any dependency on a BIOS wake feature. Cold boot is 36 seconds.
+
+Wake-on-LAN was removed with the same change: it does not wake this board from a
+full power-off (tested, no response), and the box is now never in any other
+state.
 
 ### Skip tonight
 
@@ -402,21 +414,21 @@ ssh robertcowher@lab.local 'touch /run/lab-no-suspend'
 On `/run`, so it clears itself at the next boot. Forgetting to remove it costs
 one night, not every night.
 
-### Find out why it did or didn't suspend
+### Find out why it did or didn't shut down
 
 ```bash
-ssh robertcowher@lab.local 'journalctl -u lab-idle-suspend -n 40'
+ssh robertcowher@lab.local 'journalctl -u lab-idle-shutdown -n 40'
 ```
 
 Every run prints each signal and its verdict, on quiet nights and busy ones
 alike. To ask the same question now, without waiting for the timer:
 
 ```bash
-ssh robertcowher@lab.local 'sudo /usr/local/sbin/lab-idle-suspend --dry-run'
+ssh robertcowher@lab.local 'sudo /usr/local/sbin/lab-idle-shutdown --dry-run'
 ```
 
-`--dry-run` never suspends. Your own SSH session counts as a login session, so a
-dry-run you invoke by hand always reports at least one reason to stay awake.
+`--dry-run` never powers off. Your own SSH session counts as a login session, so
+a dry-run you invoke by hand always reports at least one reason to stay up.
 
 ### What counts as "in use"
 
@@ -429,23 +441,37 @@ dry-run you invoke by hand always reports at least one reason to stay awake.
 | Login sessions, via `loginctl` | now |
 | `/run/lab-no-suspend` | — |
 
-Any single one cancels the suspend, and anything the script cannot determine
-counts as activity. The bias is deliberate: a false suspend costs a training
+Any single one cancels the shutdown, and anything the script cannot determine
+counts as activity. The bias is deliberate: a false shutdown costs a training
 run, a needless wakeful night costs pennies.
 
 `sar` is the only signal with an hour of memory — every other one is
-instantaneous and would happily suspend a box whose run ended at 23:30. That is
-why `sysstat` collection is not optional here; without it the script refuses to
-suspend rather than guess.
+instantaneous and would happily power off a box whose run ended at 23:30. That
+is why `sysstat` collection is not optional here; without it the script refuses
+to shut down rather than guess.
+
+### Checking GPU health
+
+```bash
+sudo -u beekeeper /home/beekeeper/.conda/envs/<env>/bin/python scripts/gpu_health.py
+```
+
+Allocates and runs a kernel on every card. Worth knowing why it exists: during
+the corruption above, `nvidia-smi` listed both GPUs with sane memory and a
+running llama-server kept serving normally. Nothing visible said anything was
+wrong — the failure only appeared when something asked for a *new* CUDA context.
+"It booted and nvidia-smi looks fine" is not a health check.
 
 ### Changing the schedule
 
-The `power_*` variables in `hosts/lab/vars.yml`. Set `power_suspend_enabled:
+The `power_*` variables in `hosts/lab/vars.yml`. Set `power_shutdown_enabled:
 false` to stop it without removing the role.
 
-**Never set `Persistent=true` on the timer.** systemd would replay every
-overnight run missed while the box was asleep, so it would suspend itself again
-the instant it woke at 17:00. `verify.yml` asserts this is off.
+**Never set `Persistent=true` on the timer.** systemd would replay the overnight
+runs missed while the box was off, so switching it on would power it straight
+back down. `verify.yml` asserts this is off, and asserts the inverse too — that
+a disabled timer is actually stopped, which caught a handler re-arming a feature
+that config said was off.
 
 ---
 
