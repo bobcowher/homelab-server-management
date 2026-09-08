@@ -213,8 +213,10 @@ tensorboard_port_range: "6006:6016"
 # the RTC alarm, its UTC conversion, and the dependency on a BIOS wake feature.
 # The wake was only ever worth having if it was free, and it was not.
 #
-# Still false pending one real end-to-end shutdown test.
-power_shutdown_enabled: false
+# Tested end to end 2026-09-07 through the real systemd unit with no session
+# connected: every veto clear, powered off at 19:11:02, cold boot clean with
+# both GPUs healthy and zero Xid errors.
+power_shutdown_enabled: true
 
 # Hourly retry window. The check at 00:00 is usually the one that fires; the
 # rest exist so a run still going at midnight only delays the shutdown instead
