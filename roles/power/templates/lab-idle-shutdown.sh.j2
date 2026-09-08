@@ -191,12 +191,31 @@ report "gpu compute processes" "${gpu_procs}"
 # Ansible's own connection counts as a session, so a --dry-run during a deploy
 # always reports at least one. That is expected and harmless: when the timer
 # actually fires overnight, nothing is connected unless someone really is.
-sessions=0
-for sid in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
-    if [[ "$(loginctl show-session "$sid" -p Class --value 2>/dev/null)" == "user" ]]; then
-        sessions=$(( sessions + 1 ))
-    fi
-done
+# Emits "<Class> <State>" per session, one per line.
+session_states() {
+    local sid
+    for sid in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
+        printf '%s %s\n' \
+            "$(loginctl show-session "$sid" -p Class --value 2>/dev/null)" \
+            "$(loginctl show-session "$sid" -p State --value 2>/dev/null)"
+    done
+}
+
+# State=closing is excluded, and that exclusion is load-bearing. A session whose
+# leader has exited but which still contains a stray process sits in "closing"
+# indefinitely -- logind will not reap it while anything remains in its cgroup.
+# Counting those means one leaked background process pins the box awake forever.
+#
+# That is not hypothetical: a test stub leaked a python process on 2026-09-07,
+# its session sat in "closing" for 19 hours, and it vetoed all nine overnight
+# runs. Every other signal was clear on every one of them. Nobody was working;
+# a corpse was.
+#
+# "active" and "online" both count -- online is a real login that simply is not
+# the foreground session.
+sessions_from_states() { awk '$1 == "user" && $2 != "closing"'; }
+
+sessions=$(session_states | sessions_from_states | grep -c .)
 report "login sessions" "${sessions}"
 [[ "$sessions" -gt 0 ]] && veto "${sessions} login session(s) open"
 

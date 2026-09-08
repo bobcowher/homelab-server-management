@@ -146,5 +146,44 @@ else
 fi
 
 echo
+echo "== session state filter =="
+
+# The overnight run of 2026-09-07 fired all nine times and was vetoed all nine
+# times by one session in State=closing -- a logind session whose leader had
+# exited but whose cgroup still held a leaked process. Nobody was logged in.
+# Counting those means a single stray background process pins the box awake
+# forever, which is exactly what happened.
+#
+# Extracted from the INSTALLED script so this cannot pass against a stale copy.
+sess_prog=$(sed -n '/^sessions_from_states()/,/^}/p' "$REAL" | sed -n "s/.*awk '\\(.*\\)'.*/\\1/p")
+if [[ -z "$sess_prog" ]]; then
+    echo "FAIL  could not extract sessions_from_states filter from $REAL"
+    fail=$(( fail + 1 ))
+else
+    # label, expected count, fixture lines
+    sess_case() {
+        local label="$1" want="$2"; shift 2
+        local got
+        got=$(printf '%s\n' "$@" | awk "$sess_prog" | grep -c .)
+        if [[ "$got" == "$want" ]]; then
+            echo "PASS  $label"
+            pass=$(( pass + 1 ))
+        else
+            echo "FAIL  $label -- expected $want, got $got"
+            fail=$(( fail + 1 ))
+        fi
+    }
+
+    sess_case "closing session is not counted" 0 "user closing"
+    sess_case "active session is counted" 1 "user active"
+    sess_case "online session is counted" 1 "user online"
+    sess_case "manager session is never counted" 0 "manager active"
+    sess_case "the exact overnight state counts nobody" 0 \
+        "manager active" "user closing"
+    sess_case "a real login alongside a corpse still counts" 1 \
+        "manager active" "user closing" "user active"
+fi
+
+echo
 echo "$pass passed, $fail failed"
 exit $(( fail > 0 ))
