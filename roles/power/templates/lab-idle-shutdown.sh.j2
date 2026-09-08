@@ -90,9 +90,18 @@ sar_window() {
     fi
 }
 
-# Data rows only: an ISO timestamp in $1. Drops the banner, the column header
-# and the trailing "Average:" line, which would otherwise be parsed as data.
-sar_data() { awk '$1 ~ /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]$/'; }
+# Data rows only. Drops the banner, the column header, the trailing "Average:"
+# line -- and the reboot marker, which is the subtle one.
+#
+# After a reboot sar emits "21:35:48     LINUX RESTART  (32 CPU)". That line
+# BEGINS WITH A TIMESTAMP, so a filter matching only on $1 accepts it as data:
+# the rows are non-empty, the NO DATA guard below never fires, and the maxima
+# compute to 0.00 from a line containing no measurements. The script then reads
+# a box it knows nothing about as idle -- precisely what that guard exists to
+# prevent. Requiring numeric measurement columns excludes it.
+sar_data() {
+    awk '$1 ~ /^[0-9][0-9]:[0-9][0-9]:[0-9][0-9]$/ && $0 !~ /RESTART/ && NF >= 6'
+}
 
 load_rows=$(sar_window -q | sar_data)
 cpu_rows=$(sar_window -u | sar_data)
@@ -106,7 +115,7 @@ if [[ -z "$load_rows" || -z "$cpu_rows" ]]; then
 else
     # Peak, not mean. A twenty-minute run inside a sixty-minute window averages
     # down to nothing; its peak stays visible.
-    max_load=$(awk 'BEGIN{m=0} {if ($5+0 > m) m=$5+0} END{printf "%.2f", m}' <<<"$load_rows")
+    max_load=$(awk 'BEGIN{m=0} $5 ~ /^[0-9]/ {if ($5+0 > m) m=$5+0} END{printf "%.2f", m}' <<<"$load_rows")
     max_cpu=$(awk 'BEGIN{m=0} $2=="all" {u=$3+$5; if (u > m) m=u} END{printf "%.2f", m}' <<<"$cpu_rows")
 
     report "peak ldavg-5 (${IDLE_MINUTES}m)" "${max_load} (max ${LOAD_MAX})"

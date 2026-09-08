@@ -877,10 +877,53 @@
           - pw_dryrun.stdout is search('beekeeper')
           - pw_dryrun.stdout is search('gpu compute processes')
           - pw_dryrun.stdout is search('login sessions')
-          # A NO DATA reading means sysstat is not collecting, which silently
-          # removes the only signal with an hour of memory.
-          - pw_dryrun.stdout is not search('NO DATA')
         fail_msg: "The idle check did not evaluate every signal:\n{{ pw_dryrun.stdout }}"
+      tags: [power]
+
+    # sysstat is the only signal with an hour of memory, so its collection
+    # timers are asserted structurally. This holds at any uptime, unlike the
+    # presence of data below.
+    - name: sysstat is actually collecting
+      ansible.builtin.command: systemctl is-active sysstat-collect.timer
+      register: pw_sysstat
+      changed_when: false
+      failed_when: pw_sysstat.stdout | trim != 'active'
+      tags: [power]
+
+    # Skipped on a freshly booted host. sysstat samples every 10 minutes, so a
+    # box up for less than that legitimately has no rows yet and the check
+    # correctly refuses to shut down -- asserting otherwise would fail a
+    # verify run that happens to follow a reboot.
+    - name: The CPU and load history is populated
+      ansible.builtin.assert:
+        that:
+          - pw_dryrun.stdout is not search('NO DATA')
+        fail_msg: >-
+          No sysstat history despite {{ (ansible_uptime_seconds / 60) | round | int }}
+          minutes of uptime. The idle check has lost the only signal that
+          remembers more than an instant, and will refuse to shut down.
+      when: ansible_uptime_seconds > 1200
+      tags: [power]
+
+    # Runs the veto branches an idle box never reaches: the cross-midnight sar
+    # read, the threshold comparisons, beekeeper reporting busy, the reboot
+    # marker, the override flag. Every case runs a modified COPY of the
+    # installed script under --dry-run, so nothing here can power the box off.
+    #
+    # Wired into verify rather than left as a manual script because the first
+    # run of it found a live bug -- sar's "LINUX RESTART" line being counted as
+    # data, which defeated the guard that stops the box shutting down on no
+    # evidence at all. That class of thing only stays fixed if it runs.
+    - name: The idle check's veto branches all fire
+      ansible.builtin.script: ../../scripts/test_idle_checks.sh
+      register: pw_branches
+      changed_when: false
+      become: true
+      tags: [power]
+
+    - name: Report the veto branch results
+      ansible.builtin.debug:
+        msg: "{{ pw_branches.stdout_lines | select('search', 'passed|FAIL') | list }}"
       tags: [power]
 
     - name: Read the unattended-upgrade timer state
