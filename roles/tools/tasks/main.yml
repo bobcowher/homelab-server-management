@@ -39,3 +39,51 @@
   # Per-user, never as root: Claude Code self-updates, and a root install
   # fights its own updater and puts credentials under the wrong home. Guarded
   # on absence rather than pinned, for the same reason.
+
+# --- terminfo ------------------------------------------------------------
+# ssh forwards TERM verbatim, so an interactive session arrives on lab as
+# TERM=xterm-ghostty. Ubuntu's ncurses-term has the entry under the bare name
+# `ghostty` only, with no `xterm-ghostty` alias, so tmux refuses to start:
+# "missing or unsuitable terminal: xterm-ghostty".
+#
+# /etc/terminfo, not /usr/share/terminfo: the latter is dpkg-owned and an
+# ncurses upgrade would wipe anything dropped there. Debian builds ncurses with
+# TERMINFO_DIRS=/etc/terminfo:/lib/terminfo:/usr/share/terminfo, so /etc is
+# both ours to write and searched first. (/usr/local/share/terminfo is not on
+# that path at all -- installing there looks right and does nothing.)
+#
+# Spelled out for the one entry rather than looped over a directory: a loop
+# that stages a whole directory but compiles from a separate list can stage a
+# new entry and never compile it. Add a second terminal by copying these three
+# tasks; generalise on the third.
+- name: Create the terminfo staging directory
+  ansible.builtin.file:
+    path: /usr/local/share/terminfo-src
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Stage the ghostty terminfo source
+  ansible.builtin.copy:
+    src: terminfo/xterm-ghostty.terminfo
+    dest: /usr/local/share/terminfo-src/xterm-ghostty.terminfo
+    owner: root
+    group: root
+    mode: "0644"
+  register: tools_ghostty_staged
+
+- name: Check whether the ghostty terminfo entry is compiled
+  ansible.builtin.stat:
+    path: /etc/terminfo/x/xterm-ghostty
+  register: tools_ghostty_compiled
+
+- name: Compile the ghostty terminfo entry
+  ansible.builtin.command:
+    cmd: tic -x -o /etc/terminfo /usr/local/share/terminfo-src/xterm-ghostty.terminfo
+  # Two triggers, because either alone leaves a hole: the staged source
+  # changing (a regenerated entry has to be recompiled) and the compiled entry
+  # being absent (a host where the source is already staged but /etc/terminfo
+  # was never built -- copy reports no change, nothing recompiles, and tmux
+  # stays broken).
+  when: tools_ghostty_staged.changed or not tools_ghostty_compiled.stat.exists

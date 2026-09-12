@@ -570,6 +570,47 @@ by the first link that comes up.
 
 ---
 
+### tmux: "missing or unsuitable terminal: xterm-ghostty"
+
+`ssh` forwards `TERM` verbatim, so a session opened from Ghostty arrives on lab
+as `TERM=xterm-ghostty`. Ubuntu's `ncurses-term` carries that terminal under the
+bare name `ghostty` and ships **no `xterm-ghostty` alias**, so the lookup failed
+and `tmux` refused to start. `less`, `vim` and anything else using terminfo
+degraded quietly at the same time.
+
+The `tools` role vendors Ghostty's own entry
+(`roles/tools/files/terminfo/xterm-ghostty.terminfo`) and compiles it with
+`tic -x -o /etc/terminfo`. **`/etc/terminfo`, not `/usr/share/terminfo`** — the
+latter is dpkg-owned, so an entry compiled there survives exactly until the next
+`ncurses` upgrade. Debian builds ncurses with
+`TERMINFO_DIRS=/etc/terminfo:/lib/terminfo:/usr/share/terminfo`, so `/etc` is
+both writable and searched first. (`/usr/local/share/terminfo` is not on that
+path at all — installing there looks right and does nothing.)
+
+Check it:
+
+```bash
+ssh robertcowher@lab.local 'TERM=xterm-ghostty tput longname'   # -> Ghostty
+```
+
+**For any other terminal**, the fix is the same shape: regenerate the source on
+a machine running it and add three tasks to `roles/tools/tasks/main.yml`.
+
+```bash
+infocmp -x xterm-ghostty > roles/tools/files/terminfo/xterm-ghostty.terminfo
+```
+
+`-x` matters — the extended capabilities are where truecolor (`Tc`, `Su`) lives,
+and `verify.yml` asserts they survived.
+
+> Note what the verify does **not** do: `tmux new-session -d` exits 0 on a host
+> with no entry at all, because the lookup only happens when a client attaches
+> to a tty. A tmux-based check would have passed for the entire outage. The
+> assertion resolves the terminfo name instead, and confirms the compiled file
+> is in `/etc/terminfo`.
+
+---
+
 ## Handle with care
 
 Five operations can take the machine away from you. Each is guarded — the guards are the point, don't remove them.

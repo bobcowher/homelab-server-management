@@ -469,6 +469,50 @@
         fail_msg: "claude --version failed: {{ claude_v.stderr | default('') }}"
       tags: [tools]
 
+    # ssh hands lab whatever TERM the workstation exports. Ubuntu ships the
+    # ghostty entry as `ghostty` with no `xterm-ghostty` alias, which is why
+    # tmux refused to start. Note what this does NOT assert: `tmux new-session
+    # -d` returns 0 on a host with no entry at all -- it only fails on attach,
+    # which needs a tty -- so a tmux-based check would have passed throughout
+    # the outage. Resolving the terminfo name is the thing that was broken.
+    - name: The ghostty terminfo entry resolves
+      ansible.builtin.command: infocmp -x -1 xterm-ghostty
+      register: ghostty_ti
+      changed_when: false
+      failed_when: false
+      tags: [tools]
+
+    - name: Interactive sessions from ghostty have a usable terminal
+      ansible.builtin.assert:
+        that:
+          - ghostty_ti.rc == 0
+          - "'colors#0x100' in ghostty_ti.stdout or 'colors#256' in ghostty_ti.stdout"
+          - "'Tc' in ghostty_ti.stdout"
+        fail_msg: >-
+          TERM=xterm-ghostty does not resolve on lab (rc={{ ghostty_ti.rc }}).
+          tmux will abort with "missing or unsuitable terminal" for anyone
+          connecting from Ghostty.
+      tags: [tools]
+
+    - name: The compiled entry lives in /etc/terminfo
+      ansible.builtin.stat:
+        path: /etc/terminfo/x/xterm-ghostty
+      register: ghostty_ti_file
+      tags: [tools]
+
+    # /usr/share/terminfo is dpkg-owned: an entry compiled there survives until
+    # the next ncurses upgrade and then vanishes. Asserting the path, not just
+    # that the name resolves, is what keeps this from silently regressing.
+    - name: The terminfo entry is somewhere an ncurses upgrade will not erase
+      ansible.builtin.assert:
+        that:
+          - ghostty_ti_file.stat.exists
+        fail_msg: >-
+          xterm-ghostty resolves but /etc/terminfo/x/xterm-ghostty is missing,
+          so it is being served from a package-owned directory and will
+          disappear on the next ncurses upgrade.
+      tags: [tools]
+
     - name: llama-swap service state
       ansible.builtin.systemd_service:
         name: llama-swap
