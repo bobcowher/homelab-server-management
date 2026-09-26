@@ -626,6 +626,14 @@ Five operations can take the machine away from you. Each is guarded — the guar
 ssh -o ControlPath=none robertcowher@lab.local true
 ```
 
+Password logins are **on** (`PasswordAuthentication yes` in `roles/base/tasks/main.yml`), so a device with no key on it can still get in. `PermitRootLogin` stays `no`. Two things about this are easy to get wrong:
+
+- **Drop-in order decides the winner, not the file you edited.** `Include /etc/ssh/sshd_config.d/*.conf` reads in lexicographic order and sshd keeps the **first** value it sees for a keyword. Ours is `10-lab.conf`; cloud-init ships `50-cloud-init.conf` with its own `PasswordAuthentication`. Renumbering ours above 50 silently hands the setting to cloud-init. Ask sshd what it actually resolved rather than reading a file:
+  ```bash
+  ssh robertcowher@lab.local 'sudo sshd -T | grep -E "^(passwordauthentication|permitrootlogin)"'
+  ```
+- **The flag and the account have to agree.** `PasswordAuthentication yes` on an account whose password is locked or unset looks enabled and refuses every login. `passwd -S robertcowher` must report `P` in the second field (`L` = locked, `NP` = none). The verify play asserts both the effective flag and the account state, for exactly this reason.
+
 **Driver packages** — Dry-run apt before installing anything `nvidia-*`. A userspace/kernel-module mismatch breaks every GPU workload until reboot.
 
 ---
@@ -673,6 +681,14 @@ job-start hook, would push a lab-specific VRAM policy into a public project that
 would inherit; and "always unload before training" is not always the wanted behavior, since running
 a model and a training job side by side is sometimes the point. Revisit if a real run is ever lost
 to this. If it is automated, it belongs in a local job-launch wrapper, not upstream in Beekeeper.
+
+### 🟡 Nothing rate-limits SSH password attempts
+
+Password logins are enabled and `fail2ban` is not installed, so there is no lockout after repeated
+failures. The exposure is bounded rather than absent: port 22 is scoped to `192.168.1.0/24` by ufw
+and nothing is forwarded from the internet, so an attacker has to already be on the LAN, and root
+cannot be logged into at all. Worth fixing if lab is ever reachable from outside the LAN — which,
+per the gap below, is the shape a Tailscale rollout would take.
 
 ### 🟡 Tailscale, TLS, and real hostnames
 

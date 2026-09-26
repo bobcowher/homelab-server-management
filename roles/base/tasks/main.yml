@@ -82,8 +82,19 @@
     # Not optional. A typo here plus the reload handler below ends this
     # session and every future one, on a machine reachable only over SSH.
     validate: /usr/sbin/sshd -t -f %s
+    # PasswordAuthentication is deliberately on: lab has no port open to the
+    # internet and the firewall scopes 22 to 192.168.1.0/24, so the exposure is
+    # LAN-local, and being able to get in from a device that has no key on it
+    # (phone, a fresh VM, a borrowed laptop) is worth more here than refusing
+    # passwords. PermitRootLogin stays off -- that is the account worth
+    # brute-forcing, and it has no business accepting a password either way.
+    #
+    # This file is 10-, cloud-init's is 50-, and `Include sshd_config.d/*.conf`
+    # reads them in lexicographic order while sshd keeps the FIRST value it
+    # sees for a keyword. So this drop-in wins; do not renumber it upward
+    # expecting the setting to stick.
     content: |
-      PasswordAuthentication no
+      PasswordAuthentication yes
       PermitRootLogin no
       X11Forwarding no
   notify: Reload sshd

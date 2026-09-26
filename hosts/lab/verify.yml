@@ -118,6 +118,50 @@
       changed_when: false
       tags: [users]
 
+    # sshd -T, not the content of 10-lab.conf: `Include sshd_config.d/*.conf`
+    # merges every drop-in and sshd keeps the first value it sees per keyword,
+    # so a file-content check would pass while a lexicographically earlier
+    # drop-in silently overrode the setting. This asks sshd what it will
+    # actually do.
+    - name: Collect the effective sshd configuration
+      ansible.builtin.command: /usr/sbin/sshd -T
+      become: true
+      register: sshd_effective
+      changed_when: false
+      tags: [base]
+
+    - name: Password logins are accepted and root logins are not
+      ansible.builtin.assert:
+        that:
+          - "'passwordauthentication yes' in sshd_effective.stdout_lines"
+          - "'permitrootlogin no' in sshd_effective.stdout_lines"
+        fail_msg: >-
+          Effective sshd config is not what 10-lab.conf asks for:
+          {{ sshd_effective.stdout_lines
+             | select('match', '^(passwordauthentication|permitrootlogin) ')
+             | join(', ') }}
+      tags: [base]
+
+    - name: Check that the login account has a usable password
+      ansible.builtin.command: passwd -S robertcowher
+      become: true
+      register: rc_passwd
+      changed_when: false
+      tags: [base]
+
+    # PasswordAuthentication yes on an account with a locked or absent password
+    # is a config that looks enabled and refuses every login. The flag and the
+    # account have to agree, so check both.
+    - name: The login account can actually be used with a password
+      ansible.builtin.assert:
+        that:
+          - rc_passwd.stdout.split()[1] == 'P'
+        fail_msg: >-
+          robertcowher's password status is
+          "{{ rc_passwd.stdout.split()[1] }}" (P = usable, L = locked,
+          NP = none). sshd accepts passwords but this account cannot use one.
+      tags: [base]
+
     - name: Collect volume group free space
       ansible.builtin.command: vgs --noheadings -o vg_free --units b --nosuffix ubuntu-vg
       become: true
