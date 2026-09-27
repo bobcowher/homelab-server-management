@@ -61,6 +61,38 @@ tools_apt:
   - unzip
   - nvme-cli
   - smartmontools
+  # dmidecode is already present on the base image, but the memory diagnosis
+  # in docs/RUNBOOK.md leans on `dmidecode -t 17`, so it is pinned here rather
+  # than assumed.
+  - dmidecode
+
+  # --- memory diagnostics ------------------------------------------------
+  # This box has no ECC (four non-ECC Corsair DIMMs), and that decides the
+  # whole toolset: `modprobe amd64_edac` returns "No such device", no memory
+  # controller registers under /sys/devices/system/edac/mc, and no correctable
+  # error counter exists to read. edac-utils is therefore deliberately absent
+  # -- it installs a tool that would report nothing forever, which is worse
+  # than not having it. Without ECC the only evidence of a bad DIMM is a
+  # machine check or a crash after the fact, plus a load test on demand.
+  #
+  # rasdaemon is the "has there been a fault" half: it subscribes to the
+  # kernel's MCE tracepoints and records to a sqlite DB under
+  # /var/lib/rasdaemon, which survives the nightly poweroff. dmesg does not --
+  # it is current-boot only, and lab reboots every morning.
+  - rasdaemon
+  # memtester and stressapptest are the "is there a fault right now" half, both
+  # runnable on a live box with no reboot. memtester walks a fixed allocation
+  # with targeted bit patterns; stressapptest hammers memory with concurrent
+  # threads and is better at catching a DIMM that is only marginal under load.
+  # Neither can test RAM the kernel has already allocated, which is why
+  # memtest86+ still exists -- see docs/RUNBOOK.md for why it is not installed.
+  - memtester
+  - stressapptest
+  # lm-sensors reads what the asus_ec_sensors driver exposes: chipset, CPU,
+  # motherboard, T_Sensor and VRM temperatures, CPU core voltage and current.
+  # It does NOT report DRAM voltage on this board, and no Linux driver does --
+  # docs/RUNBOOK.md records why, so nobody re-litigates it.
+  - lm-sensors
 
 tools_pipx:
   - nvitop

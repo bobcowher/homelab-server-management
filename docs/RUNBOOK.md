@@ -27,8 +27,9 @@ for convenience; if the two ever disagree, this one is right.
 7. [Overnight power saving](#overnight-power-saving)
 8. [Upgrades and holds](#upgrades-and-holds)
 9. [When it breaks](#when-it-breaks)
-10. [Handle with care](#handle-with-care)
-11. [Known gaps](#known-gaps)
+10. [Sensors and memory faults](#sensors-and-memory-faults)
+11. [Handle with care](#handle-with-care)
+12. [Known gaps](#known-gaps)
 
 ---
 
@@ -611,6 +612,106 @@ and `verify.yml` asserts they survived.
 
 ---
 
+## Sensors and memory faults
+
+### What `sensors` reports — and what it does not
+
+`sensors` reads what the kernel's `asus_ec_sensors` driver pulls out of the board's embedded
+controller: chipset, CPU, motherboard, T_Sensor and VRM temperatures, chipset fan RPM, CPU core
+voltage and CPU current. `k10temp` adds the CPU die sensors and `nvme` the SSD.
+
+Two readings look broken and are not:
+
+- `T_Sensor: -40.0°C` — the board's optional thermistor header, with nothing plugged into it.
+- `CPU: 0.00 A` and `CPU Core: 199.00 mV` — the EC exposes these registers, this BIOS doesn't
+  populate them meaningfully. Use the temperatures, ignore the electrical readings.
+
+**There is no DRAM voltage reading, and no Linux driver will give you one on this board.** Recorded
+with the evidence so it doesn't get re-litigated:
+
+- `asus_wmi_sensors` loads but registers no hwmon device — its `asus` node has a `name` and nothing
+  else. That driver covers specific ROG X470/X570 boards; Pro WS X570-ACE is not one of them.
+- `asus_ec_sensors` does register, reporting `board has 8 EC sensors that span 10 registers`. None
+  of the eight is a DRAM rail.
+- `nct6775` would reach the Nuvoton Super I/O, which *does* have a DIMM voltage input — but ACPI
+  owns those I/O ports and the driver needs `acpi_enforce_resources=lax` to take them. Don't. Two
+  drivers racing the embedded controller on a machine reachable only over SSH is how you get a hang
+  with no console to watch it happen.
+- `dmidecode -t 17` prints `Configured Voltage: 1.2 V`, and that is **not** a live measurement.
+  Minimum, Maximum and Configured all read 1.2 V, which is the JEDEC nominal copied out of SPD. It
+  would say 1.2 V whether or not XMP is enabled.
+
+Settling 1.2 V vs 1.35 V requires the BIOS. Nothing on the running system knows the answer.
+
+### Has there been a memory fault?
+
+```bash
+sudo ras-mc-ctl --errors
+```
+
+This is the persistent record, and persistence is the whole point: `dmesg` covers the current boot
+only and lab powers off every night, so a machine check on Tuesday is gone by Wednesday morning.
+`rasdaemon` subscribes to the kernel's MCE tracepoints and writes to sqlite under
+`/var/lib/rasdaemon`. A clean machine reports `No Memory errors.` and `No MCE errors.` Ignore the
+`SIGNAL events` table — rasdaemon records ordinary `SIGCHLD`s there and it is not a fault log.
+
+**Know what this cannot see.** The DIMMs are non-ECC, and that is not a gap in the tooling, it is a
+property of the hardware:
+
+- There are **no correctable-error counters at all**. `modprobe amd64_edac` returns
+  `No such device`, nothing registers under `/sys/devices/system/edac/mc`, and `edac-utils` is
+  deliberately not installed because it would report nothing forever — a tool that always says
+  "clean" is worse than no tool. A quietly flipped bit in non-ECC RAM is undetectable by
+  construction; nothing in the machine is checking.
+- What rasdaemon *can* catch is a fault severe enough to raise a machine check, plus PCIe AER and
+  disk errors. Empty output means "nothing failed loudly," not "the RAM is good."
+
+Cross-check the journal, which is persistent (`/var/log/journal`) and spans many boots:
+
+```bash
+sudo journalctl -k --no-pager | grep -iE "mce|hardware error|correctable|oops|panic|BUG:"
+journalctl --list-boots    # a boot that ended well before 00:00 is the tell
+```
+
+Every normal boot ends at the nightly poweroff, so an entry ending at an odd hour is an unplanned
+stop worth reading the tail of.
+
+### Test the RAM without rebooting
+
+Both tools test only memory the kernel will hand them, so neither covers RAM already allocated.
+Size them against `free -g`, not against the installed 96 GB.
+
+```bash
+sudo memtester 8G 1                      # targeted bit patterns over a fixed allocation
+sudo stressapptest -M 8192 -s 300 -W     # concurrent threads; better at finding a marginal DIMM
+```
+
+Check nothing is training first — a large run competes with Beekeeper for RAM. Neither tool opens a
+login session, so neither vetoes the overnight shutdown on its own; start a long run with tonight's
+shutdown skipped (see [Skip tonight](#skip-tonight)).
+
+`memtest86+` is the only thing that tests *all* of RAM, and it is **not installed**, because it
+cannot be used here: it runs as a bootloader payload, needs a GRUB menu selection and a monitor to
+read the results, and lab is headless. Attach a display and install it ad hoc if it ever comes to
+that.
+
+### Suspect the configuration before the chips
+
+`sudo dmidecode -t 17` shows four populated slots running two different kits:
+
+| Slots | Part number | Kit |
+|---|---|---|
+| DIMM_A1, DIMM_B1 | `CMK64GX4M2E3200C16` | 2 × 32 GB, DDR4-3200 CL16 |
+| DIMM_A2, DIMM_B2 | `CMK32GX4M2D3600C18` | 2 × 16 GB, DDR4-3600 CL18 |
+
+96 GB total, all four dual-rank, everything running at 3200 MT/s with the 3600 kit downclocked to
+match. **Four dual-rank DIMMs is the heaviest load a Zen 2 memory controller can be asked to
+drive**, and two kits that were never validated together makes it worse. If instability appears and
+the tests above come back clean, this configuration is the first suspect, ahead of a failing chip.
+The cheapest diagnostic is to pull one kit and retest on two matched DIMMs.
+
+---
+
 ## Handle with care
 
 Five operations can take the machine away from you. Each is guarded — the guards are the point, don't remove them.
@@ -689,6 +790,15 @@ failures. The exposure is bounded rather than absent: port 22 is scoped to `192.
 and nothing is forwarded from the internet, so an attacker has to already be on the LAN, and root
 cannot be logged into at all. Worth fixing if lab is ever reachable from outside the LAN — which,
 per the gap below, is the shape a Tailscale rollout would take.
+
+### 🟡 Memory is non-ECC, and two mismatched kits fill all four slots
+
+Nothing detects a silently flipped bit: non-ECC DIMMs mean no correctable-error counters exist to
+read, so `rasdaemon` only ever sees a fault big enough to raise a machine check. On top of that the
+96 GB is two different Corsair kits (a 3200 CL16 pair and a 3600 CL18 pair) across four dual-rank
+slots — an unvalidated combination and the heaviest load this memory controller can be given. No
+errors have been recorded to date. Fixing it properly means matched ECC DIMMs, which this board does
+support with a Ryzen CPU. See [Sensors and memory faults](#sensors-and-memory-faults).
 
 ### 🟡 Tailscale, TLS, and real hostnames
 

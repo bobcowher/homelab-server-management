@@ -498,6 +498,66 @@
         fail_msg: "nvitop failed: {{ nvitop_out.stderr | default('') }}"
       tags: [tools]
 
+    # --- memory diagnostics ---------------------------------------------
+    - name: Collect sensor readings
+      ansible.builtin.command: sensors -u
+      register: sensors_out
+      changed_when: false
+      tags: [tools]
+
+    # `sensors` exits 0 whenever it finds any chip at all, so rc alone is a
+    # false green: if asus_ec_sensors stops matching this board after a kernel
+    # upgrade, sensors still succeeds and still prints k10temp and the NVMe,
+    # just with every motherboard reading silently gone. Assert on the chip
+    # that is actually hard to get, not on the exit status.
+    - name: The ASUS EC sensors are present, not just the CPU and NVMe
+      ansible.builtin.assert:
+        that:
+          - sensors_out.rc == 0
+          - "'asusec-' in sensors_out.stdout"
+          - "'temp5_input' in sensors_out.stdout"
+        fail_msg: >-
+          asus_ec_sensors is not reporting. Chips found:
+          {{ sensors_out.stdout_lines
+             | reject('match', '^( |$)') | join(', ') | default('none') }}.
+          Motherboard, chipset and VRM temperatures are unavailable until the
+          driver matches again -- check `dmesg | grep asus-ec-sensors`.
+      tags: [tools]
+
+    - name: Check that RAS event recording is running
+      ansible.builtin.command: systemctl is-active rasdaemon
+      register: rasd_active
+      changed_when: false
+      failed_when: false
+      tags: [tools]
+
+    - name: Read the recorded RAS error history
+      ansible.builtin.command: ras-mc-ctl --errors
+      become: true
+      register: ras_errors
+      changed_when: false
+      failed_when: false
+      tags: [tools]
+
+    # Two separate failures matter and only one is obvious. The daemon being
+    # dead is obvious. The subtle one is the daemon running with recording off:
+    # `ras-mc-ctl --errors` then reports nothing forever, which reads exactly
+    # like a clean machine. So this asserts the query works and produced the
+    # per-table output it only emits when a DB exists, rather than treating
+    # empty output as good news.
+    - name: RAS recording is active and its database is readable
+      ansible.builtin.assert:
+        that:
+          - rasd_active.stdout == 'active'
+          - ras_errors.rc == 0
+          - ras_errors.stdout | length > 0
+        fail_msg: >-
+          rasdaemon is "{{ rasd_active.stdout }}" and `ras-mc-ctl --errors`
+          exited {{ ras_errors.rc }} with
+          {{ ras_errors.stdout | length }} bytes. Without this there is no
+          record of a machine check surviving the nightly poweroff.
+      tags: [tools]
+
     - name: Claude Code is installed for robertcowher
       ansible.builtin.command: /home/robertcowher/.local/bin/claude --version
       become: true

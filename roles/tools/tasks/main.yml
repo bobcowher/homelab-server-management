@@ -28,6 +28,43 @@
 # users. Unprivileged it masks processes belonging to beekeeper and llm --
 # which is most of what runs on this box.
 
+# --- RAS event recording -------------------------------------------------
+# rasdaemon exists here for one reason: dmesg is current-boot only and lab
+# powers itself off every night, so a machine check logged on Tuesday is gone
+# by Wednesday morning. The daemon subscribes to the kernel's MCE tracepoints
+# and records to sqlite under /var/lib/rasdaemon, which persists. Read it with
+# `sudo ras-mc-ctl --errors`. See docs/RUNBOOK.md for what it can and cannot
+# tell you on a box with no ECC.
+#
+# The shipped unit already does the right thing -- ExecStart is
+# `rasdaemon -f -r`, where -r is what turns on recording -- so this enables it
+# rather than templating a config.
+- name: Enable rasdaemon
+  ansible.builtin.systemd_service:
+    name: rasdaemon
+    enabled: true
+    state: started
+
+# ras-mc-ctl.service is a separate unit in the same package that pushes DIMM
+# labels into EDAC's sysfs tree. There is no EDAC tree on this box -- the DIMMs
+# are non-ECC and amd64_edac refuses to load with "No such device" -- so the
+# unit has nothing to write to and fails every boot. Masked rather than merely
+# disabled, because it is WantedBy multi-user.target and an apt upgrade that
+# re-runs the package's enable hook would otherwise quietly bring it back and
+# leave systemd degraded.
+- name: Mask ras-mc-ctl, which has no EDAC tree to label
+  ansible.builtin.systemd_service:
+    name: ras-mc-ctl.service
+    enabled: false
+    masked: true
+
+# Deliberately NOT running sensors-detect. It probes the ISA and SMBus address
+# space looking for chips, and on this board the Nuvoton Super I/O is claimed
+# by ACPI -- poking it is how you wedge the embedded controller on a machine
+# that is only reachable over SSH. Nothing needs it: asus_ec_sensors matches on
+# DMI and autoloads at boot, registering the hwmon device that `sensors` reads
+# straight out of /sys/class/hwmon.
+
 - name: Install Claude Code for robertcowher
   ansible.builtin.shell:
     cmd: set -o pipefail && curl -fsSL https://claude.ai/install.sh | bash
