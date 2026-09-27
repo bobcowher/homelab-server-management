@@ -705,10 +705,34 @@ that.
 | DIMM_A2, DIMM_B2 | `CMK32GX4M2D3600C18` | 2 × 16 GB, DDR4-3600 CL18 |
 
 96 GB total, all four dual-rank, everything running at 3200 MT/s with the 3600 kit downclocked to
-match. **Four dual-rank DIMMs is the heaviest load a Zen 2 memory controller can be asked to
-drive**, and two kits that were never validated together makes it worse. If instability appears and
-the tests above come back clean, this configuration is the first suspect, ahead of a failing chip.
-The cheapest diagnostic is to pull one kit and retest on two matched DIMMs.
+match. The 5950X is Zen 3, and AMD's rated DDR4 ceiling for it depends entirely on how the slots are
+populated:
+
+| Population | Rated ceiling |
+|---|---|
+| 2 DIMMs, single-rank | 3200 MT/s |
+| 2 DIMMs, dual-rank | 3200 MT/s |
+| 4 DIMMs, single-rank | 2933 MT/s |
+| **4 DIMMs, dual-rank (what's installed)** | **2667 MT/s** |
+
+So this box runs its memory ~20% above the rated ceiling for its own population, with two kits that
+were never validated against each other. That is the first thing to suspect when chasing
+instability, ahead of a failing chip.
+
+**The fix is free, and capacity is not the constraint.** `sar` shows peak memory use over a week at
+roughly 18% of 92 GB — about 17 GB, on a day that included a training run — and idle sits near 3 GB.
+Dropping the 3600 CL18 pair leaves 64 GB on two matched dual-rank DIMMs, which is *within* the rated
+3200 ceiling, still nearly 4× the observed peak, and removes the mismatch variable at zero cost:
+
+```bash
+export S_TIME_FORMAT=ISO      # mandatory, or sar refuses to parse its own files
+sar -r -f /var/log/sysstat/sa$(date +%d)
+```
+
+Buying a second CMK64GX4M2E3200C16 kit is the worst of the available options: it keeps four
+dual-rank DIMMs and the 2667 ceiling, and two kits of the same part number are still not a matched
+set — Corsair validates DIMMs within a kit, and the ICs behind a given SKU change between production
+runs. If money is going to be spent, spend it on ECC (see the gap below).
 
 ---
 
@@ -794,11 +818,23 @@ per the gap below, is the shape a Tailscale rollout would take.
 ### 🟡 Memory is non-ECC, and two mismatched kits fill all four slots
 
 Nothing detects a silently flipped bit: non-ECC DIMMs mean no correctable-error counters exist to
-read, so `rasdaemon` only ever sees a fault big enough to raise a machine check. On top of that the
-96 GB is two different Corsair kits (a 3200 CL16 pair and a 3600 CL18 pair) across four dual-rank
-slots — an unvalidated combination and the heaviest load this memory controller can be given. No
-errors have been recorded to date. Fixing it properly means matched ECC DIMMs, which this board does
-support with a Ryzen CPU. See [Sensors and memory faults](#sensors-and-memory-faults).
+read, so `rasdaemon` only ever sees a fault big enough to raise a machine check. `dmidecode -t 16`
+confirms it — `Error Correction Type: None`. On top of that the 96 GB is two different Corsair kits
+(a 3200 CL16 pair and a 3600 CL18 pair) filling all four dual-rank slots, which caps the rated
+memory ceiling at 2667 MT/s while the board runs 3200. No errors have been recorded to date.
+
+Two fixes, in increasing cost:
+
+1. **Free:** pull the 3600 CL18 pair. 64 GB on two matched DIMMs is within the rated 3200 ceiling and
+   still ~4× the observed peak usage.
+2. **Paid, and the real fix:** 2 × 32 GB DDR4-3200 **ECC unbuffered** DIMMs. This is a Pro WS board
+   with a Ryzen 9 5950X, and ECC UDIMM support is the reason to own it — `Maximum Capacity: 128 GB`
+   across 4 slots, currently unused for error correction. With ECC, `amd64_edac` loads, a controller
+   appears under `/sys/devices/system/edac/mc`, correctable-error counters finally exist, and
+   `rasdaemon` becomes genuinely useful instead of only catching catastrophes. It converts "has there
+   been a memory fault?" from unanswerable into a number you can read.
+
+See [Sensors and memory faults](#sensors-and-memory-faults).
 
 ### 🟡 Tailscale, TLS, and real hostnames
 
