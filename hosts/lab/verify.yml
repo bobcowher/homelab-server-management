@@ -823,6 +823,37 @@
       changed_when: false
       tags: [base]
 
+    - name: Read the interface holding the default route
+      ansible.builtin.command: ip -o route show default
+      register: defroute
+      changed_when: false
+      tags: [base]
+
+    # wan_interface is the single name behind both the wait-online scoping and
+    # the DOCKER-USER DROP rule, and nothing else in the repo notices when it
+    # stops matching the cable. Every assertion downstream of it is phrased as
+    # "the rule mentions {{ wan_interface }}", which stays true when the
+    # variable names an empty port -- so the wait-online check passes while the
+    # unit times out for 30s on every boot, and the firewall check passes while
+    # the DROP rule filters an interface with no traffic on it. This is the only
+    # assertion that compares the variable against the machine.
+    - name: wan_interface names the port that actually carries traffic
+      ansible.builtin.assert:
+        that:
+          - defroute.stdout_lines | length > 0
+          - defroute.stdout_lines[0].split('dev ')[1].split()[0] == wan_interface
+        fail_msg: >-
+          wan_interface is "{{ wan_interface }}" but the default route is on
+          "{{ defroute.stdout_lines[0].split('dev ')[1].split()[0]
+              if defroute.stdout_lines | length > 0 else 'no default route' }}".
+          Both the wait-online drop-in and the DOCKER-USER DROP rule are scoped
+          to wan_interface, so while these disagree the boot burns its
+          wait-online timeout and the DROP rule guards a port with no cable in
+          it. Move the cable, or set wan_interface to the live port -- and see
+          "The box stops dead under load" in docs/RUNBOOK.md first, because
+          which port carries traffic is not an arbitrary choice here.
+      tags: [base]
+
     - name: Boot waits only for the primary link
       ansible.builtin.assert:
         that:
