@@ -616,20 +616,40 @@ Things that are *not* the cause, checked and ruled out:
 - **Not chronic.** Exactly two occurrences, both on that one boot, none across the other eleven. It
   is a race that needs load to hit.
 
-**The fix is to stop using that NIC.** The board has an Intel I211 at `enp5s0` driven by `igb`, which
-has none of this, and `/etc/netplan/00-installer-config.yaml` already configures it with
-`dhcp4: true` — it sits at `no-carrier / configuring` waiting for a cable. Move the cable to the
-other port. The original design targeted `enp5s0`; the cable was moved to the Realtek at some point,
-and moving it back is a return to the documented configuration.
+**The fix was to stop using that NIC — done 2026-09-27.** The board has an Intel I211 at `enp5s0`
+driven by `igb`, which has none of this, and `/etc/netplan/00-installer-config.yaml` already
+configured it with `dhcp4: true`; it had been sitting at `no-carrier / configuring` waiting for a
+cable. The original design targeted `enp5s0`, so moving the cable back was a return to the
+documented configuration rather than a new one. **The cable now belongs in the Intel port. If it ends
+up back in the Realtek, this whole failure mode comes back with it.**
 
-Two things follow the cable, so check them after moving it:
+Identify the port before unplugging anything, rather than counting from the case:
 
-- `wan_interface` in `hosts/lab/vars.yml` must name the port that actually carries traffic. It feeds
-  both the `wait-online` drop-in and the `DOCKER-USER` DROP rule, and when it names the empty port
-  the wait times out for 30s on every boot and the DROP rule filters an interface with no cable.
-- The DHCP lease follows the MAC, so **the IP changes**. Nothing in this repo cares — the inventory
-  addresses `lab.local` on purpose — but anything pinning a literal IP in `/etc/hosts` elsewhere on
-  the LAN goes stale.
+```bash
+sudo ethtool -p enp5s0 30          # blinks that port's LED for 30s
+sudo ethtool enp5s0 | grep -E 'Speed|Link detected'   # must be 1000Mb/s after the move
+```
+
+With no cable in it, `enp5s0` advertises only `10baseT/Half 10baseT/Full`, which is not what an I211
+should report and looks alarming. It is an unpowered PHY; it negotiated 1000Mb/s full duplex the
+moment a cable went in. A port that comes up at 10 or 100 Mbit is a real fault — move back.
+
+What the swap fixed, all of it downstream of `wan_interface: enp5s0` finally matching reality:
+
+- **`wait-online` stopped failing.** It had timed out for 30s on every boot while scoped to the empty
+  port. `systemctl is-system-running` went `degraded` → `running`. Note the unit does not retry
+  within a boot, so it stays `failed` until either a reboot or
+  `systemctl restart systemd-networkd-wait-online.service`.
+- **The `DOCKER-USER` DROP rule is in the traffic path again**, where it can actually catch a
+  container published on `0.0.0.0` by mistake.
+- **The IP went back to `192.168.1.30`.** The lease follows the MAC and the old reservation was still
+  held, so the address the original design docs cite is correct again. Nothing in this repo depended
+  on that — the inventory addresses `lab.local` on purpose — but a literal IP pinned in
+  `/etc/hosts` elsewhere on the LAN was stale while lab sat on `.33`, and is now right again by
+  accident rather than by design.
+
+`verify.yml` asserts `wan_interface` against the live default route, so this particular drift cannot
+recur silently.
 
 ---
 
