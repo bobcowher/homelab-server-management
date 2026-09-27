@@ -571,6 +571,68 @@ by the first link that comes up.
 
 ---
 
+### The box stops dead under load, with nothing in the journal
+
+Traced on 2026-09-26. The journal simply ends — no `Shutting down.`, no `Journal stopped`, no panic.
+That looks like a power cut or a memory fault and is neither. The cause is in the Realtek NIC's
+transmit path:
+
+```
+19:03:54  WARNING: drivers/iommu/dma-iommu.c:828 at __iommu_dma_unmap+0x15b/0x170, CPU#29
+            iommu_dma_unmap_phys → dma_unmap_phys → dma_unmap_page_attrs
+            rtl8169_unmap_tx_skb [r8169]      <-- here
+            rtl8169_poll [r8169] → __napi_poll → net_rx_action
+19:04:27  first  IO_PAGE_FAULT  r8169 0000:06:00.1
+19:12:10  the same WARNING again
+19:15:46  145 faults later, the journal ends mid-line
+```
+
+The `WARN` at `dma-iommu.c:828` fires when the kernel is asked to unmap a DMA address the IOMMU has
+no mapping for. `r8169` unmapped a TX buffer twice (or unmapped a corrupted one), the driver's TX
+ring and the IOMMU's mapping table diverged, and the NIC went on DMA-ing to IOVAs that were no
+longer mapped — which is what the `IO_PAGE_FAULT` stream is. Transmit then wedges and the machine
+goes with it.
+
+Check for it after any unexplained stop:
+
+```bash
+sudo journalctl --no-pager | grep -c 'dma-iommu.c:828'          # the WARN
+sudo journalctl --no-pager | grep -c 'rtl8169_unmap_tx_skb'     # names the driver
+sudo journalctl --no-pager | grep 'IO_PAGE_FAULT' | tail        # the consequence
+```
+
+Note `journalctl -k` implies the **current** boot, so it will report zero for an event that happened
+before the last reboot. Drop `-k` to search the persistent journal.
+
+Things that are *not* the cause, checked and ruled out:
+
+- **Not ASPM.** `lspci -vv -s 06:00.1` already reports `LnkCtl: ASPM Disabled`, so the usual
+  `pcie_aspm=off` workaround is already in effect.
+- **Not memory.** Zero machine checks, and the fault addresses are a fixed repeating set of 15 IOVAs
+  rather than the random scatter corruption would produce.
+- **Not the GPUs.** Xid 32/31/13 appeared on both cards between 18:59 and 19:05 with a *different
+  PID every time*, which is a training script crashing and relaunching, and the first IOMMU fault
+  came after them. Coincident, not causal.
+- **Not chronic.** Exactly two occurrences, both on that one boot, none across the other eleven. It
+  is a race that needs load to hit.
+
+**The fix is to stop using that NIC.** The board has an Intel I211 at `enp5s0` driven by `igb`, which
+has none of this, and `/etc/netplan/00-installer-config.yaml` already configures it with
+`dhcp4: true` — it sits at `no-carrier / configuring` waiting for a cable. Move the cable to the
+other port. The original design targeted `enp5s0`; the cable was moved to the Realtek at some point,
+and moving it back is a return to the documented configuration.
+
+Two things follow the cable, so check them after moving it:
+
+- `wan_interface` in `hosts/lab/vars.yml` must name the port that actually carries traffic. It feeds
+  both the `wait-online` drop-in and the `DOCKER-USER` DROP rule, and when it names the empty port
+  the wait times out for 30s on every boot and the DROP rule filters an interface with no cable.
+- The DHCP lease follows the MAC, so **the IP changes**. Nothing in this repo cares — the inventory
+  addresses `lab.local` on purpose — but anything pinning a literal IP in `/etc/hosts` elsewhere on
+  the LAN goes stale.
+
+---
+
 ### tmux: "missing or unsuitable terminal: xterm-ghostty"
 
 `ssh` forwards `TERM` verbatim, so a session opened from Ghostty arrives on lab
@@ -719,20 +781,23 @@ So this box runs its memory ~20% above the rated ceiling for its own population,
 were never validated against each other. That is the first thing to suspect when chasing
 instability, ahead of a failing chip.
 
-**The fix is free, and capacity is not the constraint.** `sar` shows peak memory use over a week at
-roughly 18% of 92 GB — about 17 GB, on a day that included a training run — and idle sits near 3 GB.
-Dropping the 3600 CL18 pair leaves 64 GB on two matched dual-rank DIMMs, which is *within* the rated
-3200 ceiling, still nearly 4× the observed peak, and removes the mismatch variable at zero cost:
+**Do not size memory from `sar` alone.** `sar` samples every 10 minutes
+(`sysstat-collect.timer`, `OnCalendar=*:00/10`) on a host that reboots daily, so a training run that
+allocates tens of GB for a few minutes does not appear in it at all. Reading it as a ceiling
+understates real demand — a week of samples showed ~17 GB peak while `Committed_AS` in the same
+window reached 31 GB. For a real number, sample at seconds:
 
 ```bash
-export S_TIME_FORMAT=ISO      # mandatory, or sar refuses to parse its own files
-sar -r -f /var/log/sysstat/sa$(date +%d)
+# peak memory across a run, 5s resolution
+while true; do awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} /^Committed_AS:/{c=$2}
+  END{printf "%s used=%.1fG committed=%.1fG\n", strftime("%H:%M:%S"), (t-a)/1048576, c/1048576}' \
+  /proc/meminfo; sleep 5; done
 ```
 
-Buying a second CMK64GX4M2E3200C16 kit is the worst of the available options: it keeps four
-dual-rank DIMMs and the 2667 ceiling, and two kits of the same part number are still not a matched
-set — Corsair validates DIMMs within a kit, and the ICs behind a given SKU change between production
-runs. If money is going to be spent, spend it on ECC (see the gap below).
+**The one free improvement is the clock, not the sticks.** Whatever ends up in the slots, four
+dual-rank DIMMs are rated 2667 and this board runs 3200. Setting 2667 (or testing 2933) in the BIOS
+costs nothing and is the only change that reduces risk without buying anything. Capacity is the
+binding constraint on everything else — see the gap below for what the options actually cost.
 
 ---
 
@@ -823,16 +888,30 @@ confirms it — `Error Correction Type: None`. On top of that the 96 GB is two d
 (a 3200 CL16 pair and a 3600 CL18 pair) filling all four dual-rank slots, which caps the rated
 memory ceiling at 2667 MT/s while the board runs 3200. No errors have been recorded to date.
 
-Two fixes, in increasing cost:
+**ECC would fix the visibility half, and it is priced out.** This is a Pro WS board with a
+Ryzen 9 5950X, so ECC UDIMM works, and with it `amd64_edac` would load, a controller would appear
+under `/sys/devices/system/edac/mc`, and correctable-error counters would finally exist. But DDR4 is
+end-of-life and prices have spiked: **a single 32 GB DDR4 ECC UDIMM is ~$270 as of 2026-09**, so
+128 GB of ECC is ~$1080. That is not proportionate to the risk, and 64 GB of ECC is not enough
+capacity to be an option. Costs actually quoted for 128 GB:
 
-1. **Free:** pull the 3600 CL18 pair. 64 GB on two matched DIMMs is within the rated 3200 ceiling and
-   still ~4× the observed peak usage.
-2. **Paid, and the real fix:** 2 × 32 GB DDR4-3200 **ECC unbuffered** DIMMs. This is a Pro WS board
-   with a Ryzen 9 5950X, and ECC UDIMM support is the reason to own it — `Maximum Capacity: 128 GB`
-   across 4 slots, currently unused for error correction. With ECC, `amd64_edac` loads, a controller
-   appears under `/sys/devices/system/edac/mc`, correctable-error counters finally exist, and
-   `rasdaemon` becomes genuinely useful instead of only catching catastrophes. It converts "has there
-   been a memory fault?" from unanswerable into a number you can read.
+| Option | Cost | Trade |
+|---|---|---|
+| Two more sticks of `CMK64GX4M2E3200C16` | ~$300 | 4 × identical SKU, non-ECC |
+| Matched 4 × 32 GB kit, used market | ~$700 | Validated as a set, non-ECC |
+| 4 × 32 GB ECC UDIMM | ~$1080 | Error counters exist |
+
+**The ~$300 route is the right buy**, and the reason is not that it is cheapest: the crash that
+prompted this investigation was traced to the `r8169` driver, not to memory, so there is no evidence
+worth $700–1080 chasing. Four sticks of one SKU removes the real defect in the current
+configuration, which is two kits with *different rated timings* (3200 CL16 against 3600 CL18) that
+the board has to find common settings for. Buy them as a single 2 × 32 GB kit rather than two loose
+sticks so the new pair is at least matched to each other, and set 2667 in the BIOS once all four are
+in.
+
+Until ECC is affordable, the substitute for error counters is `rasdaemon` plus watching for the
+signatures in [When it breaks](#when-it-breaks) — that is detection after the fact, not prevention,
+and the distinction is the gap. Revisit ECC if DDR4 prices fall or the platform changes.
 
 See [Sensors and memory faults](#sensors-and-memory-faults).
 
