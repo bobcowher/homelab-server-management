@@ -23,6 +23,7 @@
 set -uo pipefail
 
 IDLE_MINUTES={{ power_idle_window_minutes }}
+MIN_UPTIME_MINUTES={{ power_min_uptime_minutes }}
 LOAD_MAX="{{ power_idle_load_max }}"
 CPU_MAX="{{ power_idle_cpu_max }}"
 OVERRIDE_FLAG="{{ power_override_flag }}"
@@ -58,6 +59,33 @@ report() { printf '  %-24s %s\n' "$1" "$2"; }
 
 now_epoch=$(date +%s)
 start_epoch=$(( now_epoch - IDLE_MINUTES * 60 ))
+
+# --- Minimum uptime ---------------------------------------------------------
+#
+# Checked first, and printed first, because it is the signal that tells you
+# whether to believe any of the ones below it.
+#
+# The sysstat window cannot see across a boot. Minutes the box spent powered
+# off produce no samples, and no samples are indistinguishable from a quiet
+# hour -- so a freshly booted machine reads as maximally idle, which is the
+# exact opposite of the truth. The NO DATA guard below does not catch this: it
+# tests for ZERO rows, and a box up twenty-five minutes already has two or
+# three real ones, which is quite enough to compute a maximum of 0.00.
+#
+# That is how 2026-10-03 happened. Booted 07:35:50, the 08:00 check saw two
+# samples spanning ten minutes, reported "Idle on every signal", and powered
+# off 25 minutes after someone pressed the button to use the machine.
+#
+# The threshold is much longer than IDLE_MINUTES on purpose. It is not padding
+# to cover the hole in the sar history -- it is honouring the button press.
+# This box has no RTC alarm and no wake-on-LAN, so it is only ever running
+# because a person physically switched it on, and that is the clearest
+# statement of intent to use it that the machine ever receives.
+uptime_minutes=$(( $(cut -d' ' -f1 /proc/uptime | cut -d. -f1) / 60 ))
+report "uptime" "${uptime_minutes}m (min ${MIN_UPTIME_MINUTES}m)"
+if (( uptime_minutes < MIN_UPTIME_MINUTES )); then
+    veto "up only ${uptime_minutes}m, under the ${MIN_UPTIME_MINUTES}m minimum"
+fi
 
 # --- sysstat history --------------------------------------------------------
 #

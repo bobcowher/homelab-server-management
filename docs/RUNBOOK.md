@@ -435,6 +435,7 @@ a dry-run you invoke by hand always reports at least one reason to stay up.
 
 | Signal | Window |
 |---|---|
+| Uptime at least 3 hours | since boot |
 | CPU and load peak, via `sar` | last hour |
 | llama-swap inference requests | last hour |
 | Beekeeper training | now |
@@ -450,6 +451,26 @@ run, a needless wakeful night costs pennies.
 instantaneous and would happily power off a box whose run ended at 23:30. That
 is why `sysstat` collection is not optional here; without it the script refuses
 to shut down rather than guess.
+
+**`sar` cannot see across a boot, which is why the uptime guard exists.** The
+minutes a box spends powered off produce no samples, and no samples look
+exactly like a quiet hour — so without the guard a machine that came up twenty
+minutes ago reads as *maximally* idle. The "no history at all" check does not
+catch it either: that one tests for zero rows, and twenty minutes of uptime
+already yields two or three real ones, which is plenty to compute a peak of
+0.00 and power off.
+
+That is not hypothetical. On 2026-10-03 lab was switched on at 07:35:50 and
+powered itself off at 08:00:06, reporting `Idle on every signal` on the
+strength of two samples spanning ten minutes. The three-hour minimum is set
+well above the one-hour history window on purpose: it is not padding to cover
+the gap in the data, it is honouring the power button. This box has no RTC
+alarm and no wake-on-LAN, so it is only ever running because someone walked
+over and pressed the button — the clearest statement of intent to use it that
+the machine ever receives.
+
+Replayed against the six shutdowns on record, the guard changes exactly one of
+them: the 08:00 one above. The other five all had 6 to 40 hours of uptime.
 
 ### Checking GPU health
 

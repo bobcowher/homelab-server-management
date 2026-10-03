@@ -260,6 +260,25 @@ power_shutdown_window: "00..08"
 # is the real resolution of the CPU and load history.
 power_idle_window_minutes: 60
 
+# Refuse to power off a box that has not been up this long, regardless of how
+# quiet it looks.
+#
+# The sar history above cannot see across a boot: minutes the machine spent
+# powered off produce no samples, and no samples read exactly like a quiet
+# hour. On 2026-10-03 lab booted at 07:35:50 and powered itself off at
+# 08:00:06 -- 25 minutes later -- because the 60-minute window held two real
+# samples, both genuinely 0.00, and nothing in the script knew the other 50
+# minutes were spent switched off.
+#
+# Deliberately much longer than power_idle_window_minutes. This is not padding
+# to cover the gap in the sar data; it is honouring the power button. The box
+# has no RTC alarm and no wake-on-LAN, so it is only ever running because a
+# person walked over and pressed the button, and three hours is the smallest
+# window that makes that press mean "I am about to use this" rather than
+# nothing at all. The cost of being wrong is one night of idle draw; the cost
+# of the alternative is the work session that was just interrupted.
+power_min_uptime_minutes: 180
+
 # Idle on this box measures ldavg-5 at 0.00-0.02 and CPU at ~0.05%. These sit
 # roughly 25x and 100x above that floor: high enough that docker health checks
 # and a nightly logrotate do not trip them, low enough that no real training or

@@ -70,6 +70,30 @@ check "cpu above threshold vetoes" "CPU peaked at" \
     's/^CPU_MAX=.*/CPU_MAX="-1"/'
 
 echo
+echo "== minimum uptime =="
+
+# 2026-10-03: booted 07:35:50, powered off at 08:00:06 -- 25 minutes after
+# someone pressed the button to use the machine. The sar window cannot see
+# across a boot, so the 50 minutes the box spent powered off read exactly like
+# 50 quiet minutes, and the NO DATA guard did not fire because two real samples
+# had already landed. An absurd minimum proves the veto branch exists at all.
+check "uptime under the minimum vetoes" "under the" \
+    's/^MIN_UPTIME_MINUTES=.*/MIN_UPTIME_MINUTES=99999/'
+
+# And it must name the deficit rather than vetoing silently, so a morning
+# shutdown that should not have happened is diagnosable from the journal alone.
+check "the uptime veto reports the actual uptime" "uptime  " \
+    's/^MIN_UPTIME_MINUTES=.*/MIN_UPTIME_MINUTES=99999/'
+
+# A zero minimum must not veto, or the guard would pin the box awake forever
+# and every overnight shutdown would stop working.
+check "uptime over the minimum does not veto" "Idle on every signal" \
+    's/^MIN_UPTIME_MINUTES=.*/MIN_UPTIME_MINUTES=0/' \
+    's/^LOAD_MAX=.*/LOAD_MAX="999"/' \
+    's/^CPU_MAX=.*/CPU_MAX="999"/' \
+    's/^sessions=.*/sessions=0/'
+
+echo
 echo "== beekeeper =="
 
 # The exact shape beekeeper returns while training. The busy branch has never
