@@ -558,6 +558,176 @@
           record of a machine check surviving the nightly poweroff.
       tags: [tools]
 
+    # --- bobgpt ---------------------------------------------------------------
+    #
+    # This host is provisioned for a server whose code lives in
+    # github.com/bobcowher/bobgptv1. These assertions cover the host contract
+    # only; whether the server works is that repository's business.
+
+    - name: Read the bobgpt unit state
+      ansible.builtin.command: systemctl is-enabled bobgpt.service
+      register: bobgpt_enabled_state
+      changed_when: false
+      failed_when: false
+      tags: [bobgpt]
+
+    - name: Read whether bobgpt is running
+      ansible.builtin.command: systemctl is-active bobgpt.service
+      register: bobgpt_active_state
+      changed_when: false
+      failed_when: false
+      tags: [bobgpt]
+
+    # Not enabled, deliberately: a GPU service on a box whose GPUs exist for
+    # training is started by hand. Asserted together with the inverse -- that
+    # a not-enabled unit is also not running at the END of a play -- because
+    # this repo has twice shipped a check that passed while a handler had
+    # quietly re-armed the thing it was meant to guard. A manual start is
+    # fine; a start that Ansible caused is the bug this catches.
+    - name: bobgpt does not start at boot, and the play did not start it
+      ansible.builtin.assert:
+        that:
+          - bobgpt_enabled_state.stdout == 'disabled'
+          - bobgpt_active_state.stdout != 'activating'
+        fail_msg: >-
+          bobgpt.service is enabled="{{ bobgpt_enabled_state.stdout }}"
+          active="{{ bobgpt_active_state.stdout }}". It must stay disabled and
+          must never be started by a playbook run.
+      tags: [bobgpt]
+
+    - name: Read the bobgpt host facts file
+      ansible.builtin.slurp:
+        src: /etc/bobgpt/host.env
+      register: bobgpt_env
+      tags: [bobgpt]
+
+    # The facts file is the whole interface between this repo and that one, so
+    # the values the repository reads are asserted to be the values this repo
+    # believes it published.
+    - name: The host facts file publishes the contract
+      ansible.builtin.assert:
+        that:
+          - "'BOBGPT_CHECKPOINT_ROOT=' ~ bobgpt_checkpoint_root in bobgpt_env_text"
+          - "'BOBGPT_PORT=' ~ bobgpt_port in bobgpt_env_text"
+          - "'BOBGPT_HOST=' ~ bobgpt_host in bobgpt_env_text"
+          - "'BOBGPT_PYTHON=' ~ bobgpt_python in bobgpt_env_text"
+          - "'BOBGPT_SRC=' ~ bobgpt_root ~ '/src' in bobgpt_env_text"
+        fail_msg: >-
+          /etc/bobgpt/host.env does not match the variables in vars.yml.
+      vars:
+        bobgpt_env_text: "{{ bobgpt_env.content | b64decode }}"
+      tags: [bobgpt]
+
+    # One command emitting tokens, rather than two tasks whose rc is the
+    # answer. The first attempt here used `runuser`, which needs root that
+    # this play does not have, so BOTH probes failed -- and the
+    # "cannot write" half passed because the command errored, not because
+    # write was denied. A broken invocation must not be able to look like a
+    # pass, so the assertion requires the tokens to be present.
+    - name: Probe the service user's access to the checkpoints
+      ansible.builtin.command: >-
+        sudo -n -u {{ bobgpt_user }} /bin/sh -c
+        "test -r {{ bobgpt_checkpoint_root }} && echo READ=yes || echo READ=no"
+      register: bobgpt_ckpt
+      changed_when: false
+      tags: [bobgpt]
+
+    - name: The service user can read the checkpoints
+      ansible.builtin.assert:
+        that:
+          - "'READ=yes' in bobgpt_ckpt.stdout"
+        fail_msg: >-
+          {{ bobgpt_user }} cannot read {{ bobgpt_checkpoint_root }}
+          (probe said: "{{ bobgpt_ckpt.stdout | trim }}"). It is a member of
+          group ml, which is how this box shares the dataset tree.
+      tags: [bobgpt]
+
+    - name: Read the live sandbox settings off the unit
+      ansible.builtin.command: >-
+        systemctl show bobgpt.service -p ProtectSystem -p ReadWritePaths
+      register: bobgpt_sandbox
+      changed_when: false
+      tags: [bobgpt]
+
+    # This is the assertion that actually protects the checkpoints, and it is
+    # worth being precise about why.
+    #
+    # POSIX does NOT protect them. The tree is group ml with group write
+    # (drwxrwsr-x), which is deliberate -- it is how beekeeper writes runs and
+    # how robertcowher shares them -- and bobgpt is in ml so it can read the
+    # weights. Verified on 2026-10-04: the service user can create a file in
+    # the checkpoint directory.
+    #
+    # ProtectSystem=strict is what denies it, by making the whole filesystem
+    # read-only except ReadWritePaths. Also verified, with systemd-run using
+    # these exact settings: the write failed with "Read-only file system"
+    # while the cache stayed writable and the weights stayed readable.
+    #
+    # So the unit's sandbox is load-bearing, not decoration, and the
+    # checkpoint root must never appear in ReadWritePaths. A web service one
+    # bug away from truncating a training run's checkpoint is not a trade
+    # worth making.
+    - name: The sandbox makes the checkpoints read-only to the service
+      ansible.builtin.assert:
+        that:
+          - "'ProtectSystem=strict' in bobgpt_sandbox.stdout"
+          - bobgpt_checkpoint_root not in bobgpt_sandbox.stdout
+          - "'/data' not in (bobgpt_sandbox.stdout | regex_search('ReadWritePaths=.*') | default('', true))"
+        fail_msg: >-
+          bobgpt.service's sandbox does not protect the checkpoints.
+          systemctl reports: {{ bobgpt_sandbox.stdout_lines | join(' | ') }}.
+          ProtectSystem must be strict and ReadWritePaths must not reach
+          {{ bobgpt_checkpoint_root }} -- POSIX permits the write, so this is
+          the only thing stopping it.
+      tags: [bobgpt]
+
+    - name: Read the persisted Open WebUI upstreams
+      ansible.builtin.command: >-
+        python3 -c "import sqlite3,json;
+        print(json.load(open('/dev/stdin')) if False else
+        sqlite3.connect('{{ data_root }}/open-webui/webui.db').execute(
+        \"select value from config where key='openai.api_base_urls'\").fetchone()[0])"
+      register: owui_upstreams
+      changed_when: false
+      tags: [bobgpt, webstack]
+
+    # The compose env var is NOT the source of truth for this -- it is
+    # PersistentConfig, so webui.db wins from the second start onward. Reading
+    # the database is the only assertion that proves the dropdown will actually
+    # offer bobgpt.
+    - name: Open WebUI's persisted upstreams include bobgpt
+      ansible.builtin.assert:
+        that:
+          - "':' ~ bobgpt_port ~ '/v1' in owui_upstreams.stdout"
+          - "':8080/v1' in owui_upstreams.stdout"
+        fail_msg: >-
+          Open WebUI's persisted openai.api_base_urls is
+          {{ owui_upstreams.stdout }}, which does not contain both llama-swap
+          on 8080 and bobgpt on {{ bobgpt_port }}.
+      tags: [bobgpt, webstack]
+
+    - name: Check for the repo-owned entrypoint
+      ansible.builtin.stat:
+        path: "{{ bobgpt_root }}/src/serve.sh"
+      register: bobgpt_entrypoint
+      tags: [bobgpt]
+
+    # A warning, not a failure. The entrypoint belongs to bobgptv1, and this
+    # host is correctly provisioned whether or not that repository has caught
+    # up. Without this the only symptom is systemd's status=203/EXEC, which
+    # names nothing useful.
+    - name: Warn if the repository has not supplied serve.sh yet
+      ansible.builtin.debug:
+        msg: >-
+          {{ bobgpt_root }}/src/serve.sh is missing or not executable, so
+          `sudo systemctl start bobgpt` will fail with status=203/EXEC. The
+          host is ready. bobgptv1 needs to provide an executable serve.sh that
+          listens on $BOBGPT_HOST:$BOBGPT_PORT; the facts it can read are in
+          /etc/bobgpt/host.env.
+      when: not (bobgpt_entrypoint.stat.exists
+                 and bobgpt_entrypoint.stat.executable | default(false))
+      tags: [bobgpt]
+
     - name: Claude Code is installed for robertcowher
       ansible.builtin.command: /home/robertcowher/.local/bin/claude --version
       become: true
