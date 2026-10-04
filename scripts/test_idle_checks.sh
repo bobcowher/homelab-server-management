@@ -209,5 +209,49 @@ else
 fi
 
 echo
+echo "== gpu exclusion filter =="
+
+# bobgpt is a resident GPU service, and a CUDA context lives for the life of
+# the process once initialised -- so it would appear in nvidia-smi forever and
+# veto every overnight shutdown. It is excluded by cgroup, by identity, rather
+# than by turning the GPU check off, so any OTHER process holding a context
+# still vetoes. That distinction is the entire point of this signal and these
+# cases exist to keep it.
+#
+# Extracted from the INSTALLED script so this cannot pass against a stale copy.
+excl_prog=$(sed -n '/^not_excluded()/,/^}/p' "$REAL" | sed -n "s/.*awk -v ex=\"\$1\" '\(.*\)'.*/\1/p")
+if [[ -z "$excl_prog" ]]; then
+    echo "FAIL  could not extract not_excluded filter from $REAL"
+    fail=$(( fail + 1 ))
+else
+    # label, exclusion list, expected surviving count, pid fixtures
+    excl_case() {
+        local label="$1" ex="$2" want="$3"; shift 3
+        local got
+        got=$(printf '%s\n' "$@" | awk -v ex="$ex" "$excl_prog" | grep -c .)
+        if [[ "$got" == "$want" ]]; then
+            echo "PASS  $label"
+            pass=$(( pass + 1 ))
+        else
+            echo "FAIL  $label -- expected $want, got $got"
+            fail=$(( fail + 1 ))
+        fi
+    }
+
+    # The inverted case is the dangerous one. If an empty list excluded
+    # everything, the GPU veto would silently switch off on every host that
+    # has no bobgpt, and the only symptom would be a box that stops refusing
+    # to power off mid-training.
+    excl_case "empty exclusion keeps every pid" "" 2 "1234" "5678"
+    excl_case "an excluded pid is dropped" "5678" 1 "1234" "5678"
+    excl_case "a foreign pid still vetoes" "5678" 1 "1234"
+    excl_case "every pid excluded counts zero" "1234 5678" 0 "1234" "5678"
+    # Substring, not identity: pid 5678 is not pid 567.
+    excl_case "a pid containing an excluded pid is not excluded" "567" 2 "5678" "1234"
+    # nvidia-smi prints nothing when no process holds a context.
+    excl_case "no gpu processes counts zero" "" 0
+fi
+
+echo
 echo "$pass passed, $fail failed"
 exit $(( fail > 0 ))

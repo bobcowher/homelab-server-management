@@ -286,6 +286,12 @@ power_min_uptime_minutes: 180
 power_idle_load_max: "0.50"
 power_idle_cpu_max: "5.0"
 
+# One systemd unit whose CUDA processes do not count as activity, excluded by
+# cgroup. bobgpt holds a context for its whole lifetime, so counting it would
+# veto every overnight shutdown; excluding it by identity keeps the signal
+# working for everything else. Empty excludes nothing.
+power_gpu_exclude_unit: "bobgpt.service"
+
 # `touch` this to skip tonight's shutdown. On /run, so it clears itself at the
 # next boot -- forgetting to remove it costs one night, not every night.
 power_override_flag: /run/lab-no-suspend

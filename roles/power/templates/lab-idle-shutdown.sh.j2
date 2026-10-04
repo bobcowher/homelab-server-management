@@ -24,6 +24,7 @@ set -uo pipefail
 
 IDLE_MINUTES={{ power_idle_window_minutes }}
 MIN_UPTIME_MINUTES={{ power_min_uptime_minutes }}
+GPU_EXCLUDE_UNIT="{{ power_gpu_exclude_unit | default('') }}"
 LOAD_MAX="{{ power_idle_load_max }}"
 CPU_MAX="{{ power_idle_cpu_max }}"
 OVERRIDE_FLAG="{{ power_override_flag }}"
@@ -195,8 +196,37 @@ fi
 #
 # Catches CUDA work started outside beekeeper entirely -- a script run by hand
 # in tmux, a notebook -- which no API on this box would ever report.
-gpu_procs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | grep -c '[0-9]')
-report "gpu compute processes" "${gpu_procs}"
+#
+# One unit may be excluded. bobgpt is a resident GPU service started by hand,
+# and a CUDA context lives for the LIFE OF THE PROCESS once initialised:
+# unloading the model frees VRAM, but the process keeps a context and stays
+# listed here. Counting it would veto every overnight shutdown for as long as
+# the service was left running.
+#
+# Excluded by IDENTITY -- the pids in its cgroup -- and not by switching the
+# check off. Any other process holding a context still vetoes, which is the
+# whole reason this signal exists. An empty or unknown unit name excludes
+# nothing, so this is a no-op on a host where bobgpt was never installed.
+#
+# The cgroup rather than MainPID: a server may fork workers, and every one of
+# them holds its own context.
+not_excluded() {
+    awk -v ex="$1" 'BEGIN{n=split(ex,a," "); for(i=1;i<=n;i++) e[a[i]]=1} $1 ~ /^[0-9]+$/ && !($1 in e)'
+}
+
+excluded_pids=""
+if [[ -n "$GPU_EXCLUDE_UNIT" ]]; then
+    cgroup_procs="/sys/fs/cgroup/system.slice/${GPU_EXCLUDE_UNIT}/cgroup.procs"
+    [[ -r "$cgroup_procs" ]] && excluded_pids=$(tr '\n' ' ' < "$cgroup_procs")
+fi
+
+gpu_procs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null \
+    | tr -d ' ' | not_excluded "$excluded_pids" | grep -c .)
+if [[ -n "$excluded_pids" ]]; then
+    report "gpu compute processes" "${gpu_procs} (excluding ${GPU_EXCLUDE_UNIT})"
+else
+    report "gpu compute processes" "${gpu_procs}"
+fi
 [[ "$gpu_procs" -gt 0 ]] && veto "${gpu_procs} process(es) holding a CUDA context"
 
 # --- Login sessions ----------------------------------------------------------
