@@ -479,6 +479,26 @@ Two settings in `hosts/lab/vars.yml`, and they are a pair:
 Net effect: left running and idle, the box still powers off overnight. In use,
 it does not.
 
+**Both halves verified in production on 2026-10-04**, with the service
+actually running and holding 1530 MiB on the 3060:
+
+```
+bobgpt inference         1 request(s) in 60m      <- vetoes, correctly
+gpu compute processes    0 (excluding bobgpt.service)
+```
+
+And the exclusion is by identity, not blanket — a CUDA process started outside
+the unit (in a `session-*.scope`) still counts:
+
+```
+gpu compute processes    1 (excluding bobgpt.service)
+  - 1 process(es) holding a CUDA context
+```
+
+That second check is the one worth repeating if the GPU signal is ever
+changed. It is what distinguishes "ignore bobgpt" from "ignore the GPU", and
+only the first is safe.
+
 ### The 3060 is shared
 
 `bobgpt_device` is `cuda:0`, the 3060 — and `gemma-4-12b` is llama-swap's
