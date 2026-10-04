@@ -292,6 +292,13 @@ power_idle_cpu_max: "5.0"
 # working for everything else. Empty excludes nothing.
 power_gpu_exclude_unit: "bobgpt.service"
 
+# The bobgpt unit, read for recent inference requests. Empty disables the
+# signal. The pair matters: power_gpu_exclude_unit stops bobgpt's idle CUDA
+# context from blocking every shutdown, and this makes bobgpt's actual USE
+# block one. Without both, the box either never powers off or powers off
+# mid-conversation.
+power_bobgpt_unit: "bobgpt.service"
+
 # `touch` this to skip tonight's shutdown. On /run, so it clears itself at the
 # next boot -- forgetting to remove it costs one night, not every night.
 power_override_flag: /run/lab-no-suspend

@@ -209,6 +209,73 @@ else
 fi
 
 echo
+echo "== completion request matching =="
+
+# Shared by the llama-swap and bobgpt signals. The regex is the part that can
+# actually be wrong, and it had no coverage at all before: /v1/models must NOT
+# count, because Open WebUI polls it to build the model dropdown and
+# verify.yml calls it on every apply -- counting those would keep the box
+# awake on its own monitoring, forever, and look like real traffic.
+#
+# Extracted from the INSTALLED script so this cannot pass against a stale copy.
+req_prog=$(sed -n '/^completion_request_lines()/,/^}/p' "$REAL" | sed -n "s/.*grep -cE '\(.*\)'.*/\1/p")
+if [[ -z "$req_prog" ]]; then
+    echo "FAIL  could not extract completion_request_lines regex from $REAL"
+    fail=$(( fail + 1 ))
+else
+    # label, expected count, fixture log lines
+    req_case() {
+        local label="$1" want="$2"; shift 2
+        local got
+        got=$(printf '%s\n' "$@" | grep -cE "$req_prog")
+        if [[ "$got" == "$want" ]]; then
+            echo "PASS  $label"
+            pass=$(( pass + 1 ))
+        else
+            echo "FAIL  $label -- expected $want, got $got"
+            fail=$(( fail + 1 ))
+        fi
+    }
+
+    # uvicorn's access log format, which is what bobgpt will emit.
+    req_case "uvicorn chat completion counts" 1 \
+        'INFO:     127.0.0.1:52344 - "POST /v1/chat/completions HTTP/1.1" 200 OK'
+    req_case "a plain completion counts" 1 \
+        'INFO:     127.0.0.1:52344 - "POST /v1/completions HTTP/1.1" 200 OK'
+    req_case "embeddings count" 1 \
+        'INFO:     127.0.0.1:52344 - "POST /v1/embeddings HTTP/1.1" 200 OK'
+
+    # The exclusion that keeps the box from pinning itself awake.
+    req_case "/v1/models does not count" 0 \
+        'INFO:     127.0.0.1:52344 - "GET /v1/models HTTP/1.1" 200 OK'
+    req_case "an unrelated line does not count" 0 \
+        'INFO:     Application startup complete.'
+    req_case "a health probe does not count" 0 \
+        'INFO:     127.0.0.1:52344 - "GET /health HTTP/1.1" 200 OK'
+
+    req_case "a busy window counts every request" 3 \
+        'INFO:     127.0.0.1:1 - "POST /v1/chat/completions HTTP/1.1" 200 OK' \
+        'INFO:     127.0.0.1:2 - "GET /v1/models HTTP/1.1" 200 OK' \
+        'INFO:     127.0.0.1:3 - "POST /v1/chat/completions HTTP/1.1" 200 OK' \
+        'INFO:     127.0.0.1:4 - "POST /v1/completions HTTP/1.1" 200 OK'
+fi
+
+echo
+echo "== bobgpt activity =="
+
+# An unset unit must report "not installed" and must NOT veto, or a host
+# without bobgpt could never shut down.
+check "no bobgpt unit does not veto" "bobgpt inference         not installed" \
+    's/^BOBGPT_UNIT=.*/BOBGPT_UNIT=""/'
+
+# Pointed at a real unit it must read the journal and report a count rather
+# than erroring. systemd-journald always exists and serves no completions, so
+# the expected count is zero -- this proves the branch runs, and the regex
+# cases above prove what it matches.
+check "a configured bobgpt unit is read" "bobgpt inference         0 request(s)" \
+    's/^BOBGPT_UNIT=.*/BOBGPT_UNIT="systemd-journald.service"/'
+
+echo
 echo "== gpu exclusion filter =="
 
 # bobgpt is a resident GPU service, and a CUDA context lives for the life of

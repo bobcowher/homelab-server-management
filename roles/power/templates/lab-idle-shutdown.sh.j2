@@ -25,6 +25,7 @@ set -uo pipefail
 IDLE_MINUTES={{ power_idle_window_minutes }}
 MIN_UPTIME_MINUTES={{ power_min_uptime_minutes }}
 GPU_EXCLUDE_UNIT="{{ power_gpu_exclude_unit | default('') }}"
+BOBGPT_UNIT="{{ power_bobgpt_unit | default('') }}"
 LOAD_MAX="{{ power_idle_load_max }}"
 CPU_MAX="{{ power_idle_cpu_max }}"
 OVERRIDE_FLAG="{{ power_override_flag }}"
@@ -165,11 +166,37 @@ fi
 # Matched narrowly on inference paths. /v1/models is deliberately excluded --
 # the verify playbook and assorted health checks poll it, and counting those
 # would keep the box awake on its own monitoring.
+# Counts inference requests in a stream of access-log lines. Shared with the
+# bobgpt signal below, so the two cannot drift, and named so
+# scripts/test_idle_checks.sh can extract and exercise the regex directly --
+# it is the part that can actually be wrong.
+completion_request_lines() {
+    grep -cE '"(POST|GET) /v1/(chat/completions|completions|embeddings)'
+}
+
 llm_hits=$(journalctl -u "$LLAMA_SWAP_UNIT" --since "-${IDLE_MINUTES}min" \
-    --no-pager -q 2>/dev/null \
-    | grep -cE '"(POST|GET) /v1/(chat/completions|completions|embeddings)' )
+    --no-pager -q 2>/dev/null | completion_request_lines )
 report "llama-swap inference" "${llm_hits} request(s) in ${IDLE_MINUTES}m"
 [[ "$llm_hits" -gt 0 ]] && veto "${llm_hits} LLM inference request(s) in the last ${IDLE_MINUTES} minutes"
+
+# --- bobgpt inference --------------------------------------------------------
+#
+# Same reasoning as llama-swap above, for the from-scratch server. It needs its
+# own signal for two reasons: its cgroup is excluded from the GPU check by
+# design, so that cannot see it, and a 124M model generating short answers
+# barely moves the load average, so the sar window cannot either.
+#
+# Without this, a conversation in progress would not stop the box powering off
+# underneath it at midnight. That gap exists today for bobgpt and this closes
+# it before the service is ever started.
+if [[ -z "$BOBGPT_UNIT" ]]; then
+    report "bobgpt inference" "not installed"
+else
+    bobgpt_hits=$(journalctl -u "$BOBGPT_UNIT" --since "-${IDLE_MINUTES}min" \
+        --no-pager -q 2>/dev/null | completion_request_lines )
+    report "bobgpt inference" "${bobgpt_hits} request(s) in ${IDLE_MINUTES}m"
+    [[ "$bobgpt_hits" -gt 0 ]] && veto "${bobgpt_hits} bobgpt request(s) in the last ${IDLE_MINUTES} minutes"
+fi
 
 # --- Beekeeper --------------------------------------------------------------
 #
