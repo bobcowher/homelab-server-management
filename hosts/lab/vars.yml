@@ -340,8 +340,34 @@ power_bobgpt_unit: "bobgpt.service"
 gpu_power_limits:
   - index: 1
     watts: 260
+    # A positive clock offset at a FIXED cap is the headless equivalent of an
+    # undervolt: each voltage point delivers more clock, so the same watts do
+    # more work. Measured 2026-10-04 at a constant 259.4W, every step verified
+    # bit-exact over 300 iterations with zero Xid errors:
+    #
+    #   +0    62.80 TFLOPS    --
+    #   +50   63.51         +1.1%
+    #   +100  64.06         +2.0%   <- chosen
+    #   +150  65.12         +3.7%
+    #   +200  66.15         +5.3%   (= the 290W cap's throughput, at 260W)
+    #
+    # +100 is deliberately conservative. Robert chose it over the larger gains
+    # because the failure mode of an unstable offset is not a crash but
+    # SILENTLY WRONG arithmetic -- corrupted gradients that still converge, in
+    # a checkpoint nothing flags. On a box whose entire output is model
+    # weights, erring toward margin is right.
+    #
+    # Be honest about the size of this: run-to-run noise on this benchmark is
+    # about 1.2%, so a 2.0% gain is real but only barely distinguishable. The
+    # reason to keep it is that it costs nothing and risks nearly nothing, not
+    # that it is a big win.
+    #
+    # The stability limit was NOT found: +200 passed, nothing higher was tried,
+    # so the true margin above +100 is unknown but at least 100MHz.
+    offset_mhz: 100
     comment: >-
-      RTX 3090. 260W of 350W default: -16.5% throughput for -26% heat.
+      RTX 3090. 260W of 350W default, +100MHz clock offset: about -14%
+      throughput for -26% heat.
 
 # --- bobgpt ------------------------------------------------------------------
 #

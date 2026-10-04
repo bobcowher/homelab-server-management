@@ -75,6 +75,19 @@
 # by tomorrow, silently. This unit is what makes it stick, and verify.yml
 # asserts the live value matches what the repo says so a driver upgrade or a
 # manual override cannot drift unnoticed.
+# nvidia-smi cannot set clock offsets, so the unit calls this instead. Plain
+# ctypes against libnvidia-ml, with no Python dependencies, because it runs
+# from a boot-time unit long before any venv exists.
+- name: Install the GPU clock offset helper
+  ansible.builtin.copy:
+    src: gpu-clock-offset
+    dest: /usr/local/sbin/gpu-clock-offset
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Reapply GPU power limits
+  when: gpu_power_limits | default([]) | selectattr('offset_mhz', 'defined') | list | length > 0
+
 - name: Install the GPU power limit unit
   ansible.builtin.template:
     src: gpu-power-limit.service.j2

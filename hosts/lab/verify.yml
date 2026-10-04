@@ -588,6 +588,59 @@
         label: "GPU {{ item.index }} @ {{ item.watts }}W"
       tags: [nvidia]
 
+    - name: Read GPU persistence mode
+      ansible.builtin.command: >-
+        nvidia-smi --query-gpu=index,persistence_mode --format=csv,noheader
+      register: gpu_pm
+      changed_when: false
+      tags: [nvidia]
+
+    # Load-bearing, not hygiene. With persistence mode off, the driver
+    # de-initialises a GPU when its last client exits and resets the power
+    # limit to default -- the cap would revert to stock silently, and the next
+    # training run would start uncapped. A capped GPU with persistence mode off
+    # is a cap that only looks applied.
+    - name: Persistence mode is on for every capped GPU
+      ansible.builtin.assert:
+        that:
+          - "'Enabled' in (gpu_pm.stdout_lines
+             | select('match', '^' ~ item.index ~ ',') | first)"
+        fail_msg: >-
+          GPU {{ item.index }} has persistence mode off, so its
+          {{ item.watts }}W cap will reset to default once the last client
+          exits. nvidia-smi reports: {{ gpu_pm.stdout_lines | join(' | ') }}
+      loop: "{{ gpu_power_limits | default([]) }}"
+      loop_control:
+        label: "GPU {{ item.index }}"
+      tags: [nvidia]
+
+    - name: Read the live GPU clock offsets
+      ansible.builtin.command: >-
+        /usr/local/sbin/gpu-clock-offset --gpu {{ item.index }} --get
+      register: gpu_offsets
+      changed_when: false
+      loop: "{{ gpu_power_limits | default([]) | selectattr('offset_mhz', 'defined') | list }}"
+      loop_control:
+        label: "GPU {{ item.index }}"
+      tags: [nvidia]
+
+    # Offsets are driver state like power limits, so this reads the card rather
+    # than the unit file. An offset that failed to apply leaves throughput on
+    # the table silently; one that applied when it should not have is a
+    # correctness risk.
+    - name: Each GPU clock offset matches vars.yml
+      ansible.builtin.assert:
+        that:
+          - item.stdout | trim | int == item.item.offset_mhz
+        fail_msg: >-
+          GPU {{ item.item.index }} clock offset is
+          "{{ item.stdout | trim }}" MHz, expected
+          {{ item.item.offset_mhz }} MHz.
+      loop: "{{ gpu_offsets.results | default([]) }}"
+      loop_control:
+        label: "GPU {{ item.item.index }} @ {{ item.item.offset_mhz }}MHz"
+      tags: [nvidia]
+
     # --- bobgpt ---------------------------------------------------------------
     #
     # This host is provisioned for a server whose code lives in

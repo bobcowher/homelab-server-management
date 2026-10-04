@@ -723,6 +723,62 @@ there is no cleanup to forget.
 
 To change it permanently, edit `gpu_power_limits` and apply the `nvidia` tag.
 
+### The clock offset (the headless "undervolt")
+
+The 3090 also runs a **+100 MHz GPC clock offset**, applied by the same unit.
+
+No consumer GeForce exposes a voltage setter on Linux, and the usual
+`nvidia-settings -a GPUGraphicsClockOffset` route needs an X server this box
+does not have. NVML 525+ exposes `GpcClkVfOffset` without X, which
+`/usr/local/sbin/gpu-clock-offset` drives — `nvidia-smi` has no flag for it.
+
+**Why it is equivalent to an undervolt.** At a fixed cap the card already picks
+the highest voltage/frequency point that fits the budget. A positive offset
+makes each voltage point deliver *more clock*, so the same watts do more work.
+Same destination as flattening a curve in Afterburner, reached from the other
+side.
+
+Measured at a constant 259.4 W, every step verified **bit-exact over 300
+iterations** with zero Xid errors:
+
+| Offset | TFLOPS | Gain | Correctness |
+|---|---|---|---|
+| +0 | 62.80 | — | clean |
+| +50 | 63.51 | +1.1% | clean |
+| **+100** | **64.06** | **+2.0%** | clean |
+| +150 | 65.12 | +3.7% | clean |
+| +200 | 66.15 | +5.3% | clean |
+
+At +200 the card matched the 290 W cap's throughput (66.15 vs 66.24 TFLOPS)
+while drawing 260 W — the heat/throughput trade largely dissolves.
+
+**+100 is deliberately conservative**, and the reason matters more than the
+number: an unstable offset does not reliably crash, it returns **silently
+wrong arithmetic**. Corrupted gradients that still converge produce a
+checkpoint nothing flags, with no way to tell which runs were affected. On a
+box whose entire output is model weights, err toward margin.
+
+Two honest limits on that table. Run-to-run noise on this benchmark is about
+1.2%, so a 2.0% gain is real but only barely distinguishable — it is kept
+because it costs nothing, not because it is a big win. And **the stability
+limit was never found**: +200 passed and nothing higher was tried, so the
+margin above +100 is unknown, though at least 100 MHz.
+
+Re-measure with `scripts/gpu_power_sweep.py` and the offset test after any
+driver upgrade; a driver can shift the voltage/frequency curve underneath these
+numbers.
+
+### Persistence mode is load-bearing
+
+Both capped GPUs run with persistence mode on, set by the same unit **before**
+the cap. Without it, the driver de-initialises a GPU once its last client exits
+and **resets the power limit to default** — so the cap would silently revert to
+stock and the next training run would start uncapped, with nothing reporting
+it. `nvidia-smi` warns about exactly this in its Known Issues.
+
+Measured cost: 0.08 W of extra idle draw. `verify.yml` asserts it, because a
+capped GPU with persistence mode off is a cap that only looks applied.
+
 ### Locked clocks were measured and rejected
 
 `nvidia-smi -lgc` was measured as an alternative across 1400–1700 MHz. At

@@ -1,6 +1,6 @@
 # Managed by Ansible. See roles/nvidia/tasks/main.yml.
 [Unit]
-Description=Apply GPU power limits
+Description=Apply GPU power limits and clock offsets
 Documentation=https://github.com/bobcowher/homelab-server-management/blob/main/docs/RUNBOOK.md
 # Power limits live in the loaded driver, not in firmware, so they are lost on
 # every reboot -- and this box reboots every morning. Without a unit, a limit
@@ -16,7 +16,18 @@ RemainAfterExit=yes
 {% if g.comment is defined %}
 # {{ g.comment }}
 {% endif %}
+# Persistence mode FIRST, and it is not optional. Without it the driver
+# de-initialises a GPU once its last client exits and RESETS the power limit to
+# default -- so the cap would silently revert to stock and the next training run
+# would start uncapped, with nothing reporting it. nvidia-smi warns about
+# exactly this. Measured cost: 0.08W of extra idle draw.
+ExecStart=/usr/bin/nvidia-smi -i {{ g.index }} -pm 1
 ExecStart=/usr/bin/nvidia-smi -i {{ g.index }} -pl {{ g.watts }}
+{% if g.offset_mhz is defined %}
+# After the cap, deliberately: the offset only means anything within a power
+# budget. nvidia-smi has no flag for this, hence the helper.
+ExecStart=/usr/local/sbin/gpu-clock-offset --gpu {{ g.index }} --offset {{ g.offset_mhz }}
+{% endif %}
 {% endfor %}
 
 [Install]
