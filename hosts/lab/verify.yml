@@ -706,6 +706,43 @@
           on 8080 and bobgpt on {{ bobgpt_port }}.
       tags: [bobgpt, webstack]
 
+    - name: Read the ufw rules for the bobgpt port
+      ansible.builtin.command: ufw status
+      register: bobgpt_ufw
+      changed_when: false
+      become: true
+      tags: [bobgpt, firewall]
+
+    # Both halves matter, and the second is the one that would rot quietly.
+    #
+    # bobgpt binds 0.0.0.0 because Open WebUI is a container and reaches host
+    # services through the Docker bridge gateway, where a loopback bind is
+    # unreachable. That means the FIREWALL is the only thing keeping the
+    # service off the LAN, so "allowed from docker" and "not allowed from the
+    # LAN" are both load-bearing. Verified by experiment on 2026-10-04: from
+    # the open-webui container a listener on this port answers 200, and from
+    # the desktop the same listener is unreachable.
+    - name: bobgpt's port is open to containers and closed to the LAN
+      ansible.builtin.assert:
+        that:
+          - bobgpt_port | string ~ '/tcp' in bobgpt_ufw.stdout
+          - docker_bridge_subnet in bobgpt_port_rules
+          - lan_subnet not in bobgpt_port_rules
+          - bobgpt_host != '127.0.0.1'
+        fail_msg: >-
+          bobgpt's port {{ bobgpt_port }} is not scoped correctly. ufw rules
+          mentioning it: {{ bobgpt_port_rules | default('none') }}. It must be
+          allowed from {{ docker_bridge_subnet }} (or Open WebUI cannot reach
+          it at all) and must NOT be allowed from {{ lan_subnet }} (the
+          firewall is what keeps it private, since it binds
+          {{ bobgpt_host }}).
+      vars:
+        bobgpt_port_rules: >-
+          {{ bobgpt_ufw.stdout_lines
+             | select('search', bobgpt_port | string ~ '/tcp')
+             | join(' ') }}
+      tags: [bobgpt, firewall]
+
     - name: Check for the repo-owned entrypoint
       ansible.builtin.stat:
         path: "{{ bobgpt_root }}/src/serve.sh"

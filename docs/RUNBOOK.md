@@ -370,7 +370,7 @@ read the same values with `set -a; . /etc/bobgpt/host.env; set +a`.
 | `BOBGPT_VENV` | `/opt/bobgpt/venv` — **not** created by Ansible; `deploy.sh` owns it |
 | `BOBGPT_PYTHON` | the interpreter to build that venv from |
 | `BOBGPT_CHECKPOINT_ROOT` | `/data/datasets/bobgptv1/checkpoints`, read-only |
-| `BOBGPT_HOST` / `BOBGPT_PORT` | `127.0.0.1` / `8100` |
+| `BOBGPT_HOST` / `BOBGPT_PORT` | `0.0.0.0` / `8100` — see below |
 | `BOBGPT_DEVICE` | which card |
 | `BOBGPT_MAX_LOADED` | how many runs may be resident at once |
 | `BOBGPT_CACHE` | the one writable path |
@@ -395,6 +395,29 @@ cd /opt/bobgpt/src && git pull && sudo systemctl restart bobgpt
 Ansible clones the checkout **once** and never updates it (`update: false`),
 so a pull or a branch switch is never reverted by a playbook run. Change the
 branch on the box, not in `hosts/lab/vars.yml`.
+
+### Why it binds 0.0.0.0 and is still private
+
+Open WebUI is a container. It reaches host services through
+`host.docker.internal`, which `host-gateway` resolves to the **Docker bridge
+gateway** (`172.17.0.1`) — not the host's loopback. **A service bound to
+`127.0.0.1` is unreachable from it.** llama-swap works precisely because it
+binds all interfaces too.
+
+What keeps bobgpt private is the firewall, not the bind address: ufw
+default-denies incoming and the firewall role allows `8100` **only** from
+`docker_bridge_subnet`, with no `lan_subnet` rule — so it is tighter than
+llama-swap, which is also reachable from the LAN.
+
+Verified by experiment on 2026-10-04. With a listener on `0.0.0.0:8100`, the
+`open-webui` container gets `200` and the desktop gets nothing. Before the ufw
+rule existed, the container connection **timed out** regardless of bind
+address, which reads like a dead service rather than a blocked port — worth
+remembering the next time something on the host is unreachable from a
+container.
+
+`verify.yml` asserts both halves, because the "closed to the LAN" half is the
+one that would rot quietly.
 
 ### What protects the training checkpoints
 

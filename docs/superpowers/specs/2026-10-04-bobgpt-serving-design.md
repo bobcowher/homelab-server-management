@@ -94,6 +94,24 @@ Verified on 2026-10-04 against `run30_posttrain_model.pth` and
 `emb_dim` is not divisible by 64 rather than guessing, and an optional
 `config.json` beside `model.pth` overrides inference entirely.
 
+### Binds all interfaces; the firewall is what makes it private
+
+This reverses the spec's original `127.0.0.1` choice, after the repo side
+flagged it and an experiment confirmed it. `host.docker.internal` resolves via
+`host-gateway` to the Docker bridge gateway, so a loopback bind is unreachable
+from the Open WebUI container; llama-swap works only because it binds all
+interfaces too.
+
+The original proposal was "0.0.0.0 plus a rule dropping 8100 from the LAN".
+That is not what was needed: ufw already default-denies incoming, so no drop
+rule is required -- only an **allow from `docker_bridge_subnet`**, and
+deliberately none from `lan_subnet`. Before that rule existed, a connection
+from the container timed out regardless of bind address, which looks like a
+dead service rather than a blocked port.
+
+The result is tighter than llama-swap, which is reachable from the LAN as
+well.
+
 ### Standalone service, second Open WebUI upstream
 
 Rejected: registering bobgpt as a llama-swap model. llama-swap maps one model
@@ -119,7 +137,7 @@ run, a checkpoint file, a model size, a config constant, or a version.
 | `BOBGPT_PYTHON`, the interpreter the venv must be built from | torch has no wheels for the 3.14 that ships natively |
 | The systemd unit, whose `ExecStart` is a script **in** `llm_bobgpt` | needs root to install |
 | `BOBGPT_CHECKPOINT_ROOT`, `BOBGPT_DEVICE`, `BOBGPT_PORT`, `BOBGPT_MAX_LOADED` as `Environment=` | host paths and hardware |
-| The bind address and port: `127.0.0.1:8100` | must not collide with 3000/5000/8080, and must not reach the LAN |
+| The bind address and port: `0.0.0.0:8100`, plus the ufw rule scoping it | a loopback bind is unreachable from the Open WebUI container |
 | The added Open WebUI upstream (see below) | the compose file is in this repo |
 | The power-role changes below | that role is in this repo |
 
@@ -169,8 +187,9 @@ repository. After it, nothing here needs to change for bobgpt again.
    `finish_reason`, then SSE framing. The non-streaming path is rebuilt on the
    same text stream so the two cannot drift.
 
-Bugs in the current `api.py` that this fixes, all already described in
-`SERVING.md`:
+Bugs that were in `api.py` when this spec was written. **Fixed on the repo
+side on 2026-10-04** except where noted; recorded only so the reasoning
+survives:
 
 - Streaming calls `.find("### End")` on each token's decoded text in
   isolation. `### End` spans several tokens, so the match never fires and
@@ -178,7 +197,7 @@ Bugs in the current `api.py` that this fixes, all already described in
 - `id` is the literal `"5"` on every response. It must be unique per request
   (`"chatcmpl-" + uuid4().hex`) or Open WebUI will eventually merge messages.
 - `V1Models(..., queue_depth=3)` passes a field the model does not declare.
-  Pydantic drops it silently; it should go.
+  Pydantic drops it silently; it should go. **Still open** as of 2026-10-04.
 - Split multi-byte UTF-8 characters are decoded per token and can emit `U+FFFD`.
 
 ## Deploy and update loop
@@ -282,9 +301,12 @@ everything and warns, legibly, that `serve.sh` is still missing.
 
 ## Open questions
 
-- Multi-turn conversations: the training data is all single-turn (system,
-  question, answer), so multi-turn works mechanically but is out of
-  distribution. `SERVING.md` already records this.
+- ~~Multi-turn conversations are out of distribution.~~ **Withdrawn
+  2026-10-04**, corrected by the repo side: the `chat` and `oasst2` sources
+  are multi-turn, and roughly 20% of `tutor_qa` round 3 records are
+  follow-ups. Multi-turn is in distribution up to the 1024-token context.
+  This was my error -- it came from `SERVING.md`, which predates those data
+  sources.
 - Context trimming policy at 1024 tokens: oldest turns first, and whether the
   system turn is always kept.
 - Whether `/v1/models` should hide runs whose shapes cannot be inferred, or

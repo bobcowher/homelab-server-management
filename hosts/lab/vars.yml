@@ -317,8 +317,17 @@ bobgpt_repo: https://github.com/bobcowher/bobgptv1.git
 # box, not here.
 bobgpt_branch: fastapi
 
-# Loopback only; Open WebUI reaches it across the docker bridge.
-bobgpt_host: 127.0.0.1
+# NOT loopback, and this is not laxness. Open WebUI runs in a container and
+# reaches host services via host.docker.internal, which resolves to the Docker
+# bridge gateway (172.17.0.1) -- so a service bound to 127.0.0.1 is simply
+# unreachable from it. llama-swap works for exactly this reason: it binds all
+# interfaces too.
+#
+# What keeps this off the LAN is the firewall, not the bind: ufw defaults to
+# deny incoming and the firewall role allows 8100 ONLY from
+# docker_bridge_subnet. Verified 2026-10-04 by binding a listener and
+# connecting from inside the open-webui container.
+bobgpt_host: 0.0.0.0
 bobgpt_port: 8100
 
 bobgpt_checkpoint_root: "{{ data_root }}/datasets/bobgptv1/checkpoints"
