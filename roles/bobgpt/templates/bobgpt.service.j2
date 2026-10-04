@@ -1,0 +1,44 @@
+# Managed by Ansible. See roles/bobgpt/tasks/main.yml.
+[Unit]
+Description=bobgpt from-scratch GPT server
+Documentation=https://github.com/bobcowher/bobgptv1
+# The weights live on /data and Open WebUI reaches this over the docker
+# bridge, so both want to be up first. Neither is a hard requirement: started
+# by hand, long after boot, both are already there.
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ bobgpt_user }}
+# ml grants read on the checkpoint tree and on the checkout.
+Group=ml
+WorkingDirectory={{ bobgpt_root }}/src
+EnvironmentFile=/etc/bobgpt/host.env
+
+# The entrypoint is a script in the CHECKOUT, not a command composed here.
+# That is the whole boundary: uvicorn flags, worker count, log format and
+# which interpreter gets used are the repository's to change without ever
+# touching Ansible.
+ExecStart={{ bobgpt_root }}/src/serve.sh
+
+# No Restart=. Started by hand, so a crash should stay crashed and be visible
+# in `systemctl status` rather than being hidden by a restart loop that also
+# re-downloads and re-loads a model every few seconds.
+Restart=no
+
+# The service reads code and weights and writes only its cache. A web server
+# one bug away from truncating a training checkpoint is not a trade worth
+# making, and ProtectSystem=strict makes the whole filesystem read-only except
+# what is named below.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths={{ bobgpt_root }}/cache
+NoNewPrivileges=true
+# NOT PrivateDevices: that would hide /dev/nvidia*, and this needs the GPU.
+
+[Install]
+# The unit is installed with enabled=false and this section is never acted on.
+# It exists so `systemctl enable bobgpt` works if that decision ever changes.
+WantedBy=multi-user.target

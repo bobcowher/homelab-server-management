@@ -1,0 +1,9 @@
+---
+# Only if it is ALREADY running. `state: restarted` would start a stopped
+# service, which would defeat the decision not to autostart -- the same shape
+# as the handler that re-armed a feature config said was off.
+- name: Restart bobgpt if running
+  ansible.builtin.systemd_service:
+    name: bobgpt.service
+    state: restarted
+  when: bobgpt_running | default(false)

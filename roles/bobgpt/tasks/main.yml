@@ -1,0 +1,101 @@
+---
+# Provisions the host for a bobgpt server whose CODE is owned entirely by
+# github.com/bobcowher/bobgptv1. This role installs a user, a directory, a
+# facts file, a bootstrap clone and a unit -- and nothing that knows a run
+# name, a checkpoint, a model size or a package version.
+#
+# See docs/superpowers/specs/2026-10-04-bobgpt-serving-design.md.
+
+# Read first, so the handler can tell "already running" from "stopped". A
+# naive `state: restarted` would start a service that is deliberately not
+# enabled at boot.
+- name: Check whether bobgpt is already running
+  ansible.builtin.command: systemctl is-active bobgpt.service
+  register: bobgpt_active
+  changed_when: false
+  failed_when: false
+
+- name: Record whether bobgpt was running
+  ansible.builtin.set_fact:
+    bobgpt_running: "{{ bobgpt_active.stdout == 'active' }}"
+
+# A system account: no login, no home. Group ml is the whole point -- it is
+# what grants read on the checkpoint tree, which is owned by robertcowher:ml.
+- name: Create the bobgpt service user
+  ansible.builtin.user:
+    name: "{{ bobgpt_user }}"
+    system: true
+    create_home: false
+    home: "{{ bobgpt_root }}/cache"
+    shell: /usr/sbin/nologin
+    groups: ml
+    append: true
+
+# Owned by robertcowher, NOT by the service user, so `git pull` and
+# `pip install` from deploy.sh need no sudo at all. Only the restart does, and
+# that grant already exists. setgid so anything created inside stays in group
+# ml and the service can still read it.
+- name: Create the bobgpt tree
+  ansible.builtin.file:
+    path: "{{ bobgpt_root }}"
+    state: directory
+    owner: robertcowher
+    group: ml
+    mode: "2775"
+
+# The one writable path. Owned by the service user because the service is what
+# writes here; group ml so robertcowher can inspect and clear it.
+- name: Create the writable cache directory
+  ansible.builtin.file:
+    path: "{{ bobgpt_root }}/cache"
+    state: directory
+    owner: "{{ bobgpt_user }}"
+    group: ml
+    mode: "2770"
+
+- name: Create the host facts directory
+  ansible.builtin.file:
+    path: /etc/bobgpt
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the host facts file
+  ansible.builtin.template:
+    src: host.env.j2
+    dest: /etc/bobgpt/host.env
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart bobgpt if running
+
+# update: false is load-bearing. This is a BOOTSTRAP clone only: deploy.sh owns
+# the checkout from here on, and an updating clone would revert a pull or fight
+# a branch switch on every apply -- silently undoing a deploy.
+- name: Bootstrap the checkout
+  ansible.builtin.git:
+    repo: "{{ bobgpt_repo }}"
+    dest: "{{ bobgpt_root }}/src"
+    version: "{{ bobgpt_branch }}"
+    update: false
+  become: true
+  become_user: robertcowher
+
+- name: Install the service unit
+  ansible.builtin.template:
+    src: bobgpt.service.j2
+    dest: /etc/systemd/system/bobgpt.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart bobgpt if running
+
+# enabled: false, deliberately. This is a GPU service on a box whose GPUs
+# exist for training, and Robert starts it when he wants it. verify.yml asserts
+# this stays false.
+- name: Install the unit without enabling it
+  ansible.builtin.systemd_service:
+    name: bobgpt.service
+    enabled: false
+    daemon_reload: true

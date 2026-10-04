@@ -299,6 +299,45 @@ power_gpu_exclude_unit: "bobgpt.service"
 # mid-conversation.
 power_bobgpt_unit: "bobgpt.service"
 
+# --- bobgpt ------------------------------------------------------------------
+#
+# A from-scratch GPT server from github.com/bobcowher/bobgptv1, served behind
+# the existing Open WebUI. That repository is owned by Robert and another
+# agent; this repository does deployment ONLY. The unit's ExecStart is a script
+# inside the checkout, so how the server starts is owned there, and nothing
+# below names a run, a checkpoint, a model size or a package version.
+#
+# See docs/superpowers/specs/2026-10-04-bobgpt-serving-design.md.
+bobgpt_user: bobgpt
+bobgpt_root: /opt/bobgpt
+bobgpt_repo: https://github.com/bobcowher/bobgptv1.git
+
+# Bootstrap only. Ansible clones once and never updates, so a `git pull` or a
+# branch switch from deploy.sh is never reverted -- change the branch on the
+# box, not here.
+bobgpt_branch: fastapi
+
+# Loopback only; Open WebUI reaches it across the docker bridge.
+bobgpt_host: 127.0.0.1
+bobgpt_port: 8100
+
+bobgpt_checkpoint_root: "{{ data_root }}/datasets/bobgptv1/checkpoints"
+
+# Which card. gemma-4-12b is llama-swap's resident-lane model and is pinned to
+# device 0, where a Q4 12B at 32k context takes most of the 3060's 12GB. A
+# 124M model is ~0.7GB so it should still fit, but this is a variable because
+# that is a judgement call per session, not a constant.
+bobgpt_device: "cuda:0"
+
+# How many runs may be held in memory at once. Discovery exposes every run
+# under the checkpoint root, and there are already six.
+bobgpt_max_loaded: 2
+
+# torch has no wheels for the 3.14 that ships natively -- the same trap the
+# beekeeper role documents -- so the venv deploy.sh builds must come from the
+# conda 3.12.
+bobgpt_python: "{{ conda_prefix }}/envs/py312/bin/python3.12"
+
 # `touch` this to skip tonight's shutdown. On /run, so it clears itself at the
 # next boot -- forgetting to remove it costs one night, not every night.
 power_override_flag: /run/lab-no-suspend
