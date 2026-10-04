@@ -3,7 +3,12 @@
 
   "ollama.enable": false,
 
-  "openai.api_base_urls": ["http://host.docker.internal:8080/v1"],
+  "_comment_upstreams": "Two OpenAI-compatible upstreams: llama-swap on 8080 and bobgpt on 8100. api_keys MUST be the same length as api_base_urls -- Open WebUI pairs them by index, so a short list breaks the second connection. llama-swap stays first so it remains the default.",
+  "openai.api_base_urls": [
+    "http://host.docker.internal:8080/v1",
+    "http://host.docker.internal:{{ bobgpt_port }}/v1"
+  ],
+  "openai.api_keys": ["none", "none"],
 
   "web.search.enable": {{ openwebui_web_search | default(true) | to_json }},
   "web.search.engine": "searxng",

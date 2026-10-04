@@ -44,8 +44,17 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - OPENAI_API_BASE_URL=http://host.docker.internal:8080/v1
-      - OPENAI_API_KEY=none
+      # Plural form, semicolon-separated, because there are two upstreams:
+      # llama-swap on 8080 and bobgpt on 8100. Verified against this image --
+      # config.py reads OPENAI_API_BASE_URLS and falls back to the singular.
+      #
+      # These only SEED a fresh webui.db. Both keys are PersistentConfig, so
+      # the database wins from the second start onward and
+      # openwebui-desired-config.json.j2 is what actually enforces them. They
+      # are kept correct here anyway, so a wiped volume comes back right and
+      # so the compose file does not tell a different story from the database.
+      - OPENAI_API_BASE_URLS=http://host.docker.internal:8080/v1;http://host.docker.internal:{{ bobgpt_port }}/v1
+      - OPENAI_API_KEYS=none;none
       - WEBUI_AUTH=true
       # There is no Ollama on this host -- llama-swap serves the OpenAI API
       # instead. Without this, get_all_models() still fans out to the Ollama
