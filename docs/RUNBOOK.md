@@ -1195,6 +1195,25 @@ Password logins are **on** (`PasswordAuthentication yes` in `roles/base/tasks/ma
 
 ## Known gaps
 
+### 🟡 bobgpt and gemma both want the 3060, and bobgpt's appetite grew
+
+`gemma-4-12b` is llama-swap's resident-lane model, pinned to `device=0`, where
+a Q4 12B at 32k context wants most of a 12 GB card. bobgpt is on the same card
+and its footprint is not fixed: it was **1530 MiB** shortly after deployment
+and **5906 MiB** a few hours later, because it lazily loads a checkpoint per
+model id and holds up to `BOBGPT_MAX_LOADED` of them.
+
+So the original "0.7 GB will fit alongside" assessment is stale, and gemma may
+now fail to load while bobgpt is warm. Nothing detects this: llama-swap would
+report a failed model load, and the symptom is a model missing from the Open
+WebUI dropdown rather than an error anyone sees.
+
+Not yet hit, so not yet fixed. The levers, cheapest first: lower
+`bobgpt_max_loaded` (currently 2); move `bobgpt_device` to `cuda:1`, accepting
+contention with training instead; or move gemma off the 3060. Stopping bobgpt
+when not in use also works and costs nothing, which is part of why it is not
+enabled at boot.
+
 ### 🔴 No backups — the largest outstanding risk
 
 `restic` is installed and deliberately unconfigured: no repos, timers, or credentials. `/data` sits on root, on a single NVMe, with no redundancy. A disk failure loses every model, dataset, and Beekeeper's training history. The fixed UIDs mean a restore would be *correct*; there is simply nothing to restore from.
