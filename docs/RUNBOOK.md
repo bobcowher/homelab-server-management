@@ -23,13 +23,14 @@ for convenience; if the two ever disagree, this one is right.
 3. [What runs where](#what-runs-where)
 4. [Adding a model](#adding-a-model)
 5. [Web search](#web-search)
-6. [Routine changes](#routine-changes)
-7. [Overnight power saving](#overnight-power-saving)
-8. [Upgrades and holds](#upgrades-and-holds)
-9. [When it breaks](#when-it-breaks)
-10. [Sensors and memory faults](#sensors-and-memory-faults)
-11. [Handle with care](#handle-with-care)
-12. [Known gaps](#known-gaps)
+6. [bobgpt](#bobgpt)
+7. [Routine changes](#routine-changes)
+8. [Overnight power saving](#overnight-power-saving)
+9. [Upgrades and holds](#upgrades-and-holds)
+10. [When it breaks](#when-it-breaks)
+11. [Sensors and memory faults](#sensors-and-memory-faults)
+12. [Handle with care](#handle-with-care)
+13. [Known gaps](#known-gaps)
 
 ---
 
@@ -329,6 +330,112 @@ Most Open WebUI settings are **PersistentConfig**: the environment variable seed
 This is not hypothetical. A hard-coded `192.168.1.30` survived the DHCP audit inside that database, and `ENABLE_OLLAMA_API=false` silently did nothing while every page load spent ~10s waiting on an Ollama that does not exist.
 
 Declare such settings in `roles/webstack/templates/openwebui-desired-config.json.j2`. The play forces them into the database, reports `changed` only when it writes, and restarts the container. **Changing one of these in the Open WebUI admin UI will be reverted on the next Ansible run** — that is the point, but it will surprise you if you forget.
+
+---
+
+## bobgpt
+
+A from-scratch GPT served behind the same Open WebUI as everything else. The
+code lives in **`github.com/bobcowher/bobgptv1`** and is owned there, not
+here. This repository does deployment only: a user, a directory, a facts file,
+a bootstrap clone, a unit, and the Open WebUI upstream. Nothing here names a
+run, a checkpoint, a model size or a package version.
+
+Design and rationale: `docs/superpowers/specs/2026-10-04-bobgpt-serving-design.md`.
+
+### Turning it on
+
+```bash
+sudo systemctl start bobgpt      # it does NOT start at boot, on purpose
+sudo systemctl status bobgpt
+```
+
+It is a GPU service on a box whose GPUs exist for training, so it is started
+by hand and `verify.yml` asserts it stays disabled. The box powers itself off
+overnight, so it is off again every morning regardless.
+
+If it fails with `status=203/EXEC`, the repository has not supplied
+`/opt/bobgpt/src/serve.sh` yet. `verify.yml` warns about this by name rather
+than leaving you with systemd's error.
+
+### The contract
+
+Ansible publishes every host-specific fact to **`/etc/bobgpt/host.env`**. The
+unit loads it with `EnvironmentFile`, and the repository's `deploy.sh` can
+read the same values with `set -a; . /etc/bobgpt/host.env; set +a`.
+
+| Variable | Value |
+|---|---|
+| `BOBGPT_SRC` | `/opt/bobgpt/src` — the checkout, owned `robertcowher:ml` |
+| `BOBGPT_VENV` | `/opt/bobgpt/venv` — **not** created by Ansible; `deploy.sh` owns it |
+| `BOBGPT_PYTHON` | the interpreter to build that venv from |
+| `BOBGPT_CHECKPOINT_ROOT` | `/data/datasets/bobgptv1/checkpoints`, read-only |
+| `BOBGPT_HOST` / `BOBGPT_PORT` | `127.0.0.1` / `8100` |
+| `BOBGPT_DEVICE` | which card |
+| `BOBGPT_MAX_LOADED` | how many runs may be resident at once |
+| `BOBGPT_CACHE` | the one writable path |
+
+The repository must provide `$BOBGPT_SRC/serve.sh`, executable, serving an
+OpenAI-compatible API on `$BOBGPT_HOST:$BOBGPT_PORT`. Everything else —
+dependencies, uvicorn flags, logging, which checkpoints are exposed — is the
+repository's business.
+
+**`BOBGPT_PYTHON` is not a detail.** The 3.14 that ships natively has no torch
+wheels, so the venv has to be built from the conda 3.12. The beekeeper role
+documents the same trap.
+
+### Updating it
+
+`deploy.sh` in the repository owns this, and needs sudo only for the restart:
+
+```bash
+cd /opt/bobgpt/src && git pull && sudo systemctl restart bobgpt
+```
+
+Ansible clones the checkout **once** and never updates it (`update: false`),
+so a pull or a branch switch is never reverted by a playbook run. Change the
+branch on the box, not in `hosts/lab/vars.yml`.
+
+### What protects the training checkpoints
+
+**POSIX does not.** The checkpoint tree is group `ml` with group write, which
+is deliberate — it is how beekeeper writes runs and how you share them — and
+the service user is in `ml` so it can read the weights. It can also create
+files there.
+
+`ProtectSystem=strict` on the unit is what prevents it, by making the whole
+filesystem read-only except `BOBGPT_CACHE`. Verified with `systemd-run` using
+the unit's exact settings: the write fails with *Read-only file system* while
+the cache stays writable and the weights stay readable. `verify.yml` asserts
+`ProtectSystem=strict` and that the checkpoint root never appears in
+`ReadWritePaths`.
+
+So that line in the unit is load-bearing. Do not relax it to fix a permissions
+problem; fix the permissions.
+
+### How it interacts with the overnight poweroff
+
+Two settings in `hosts/lab/vars.yml`, and they are a pair:
+
+- `power_gpu_exclude_unit: bobgpt.service` — a CUDA context lives for the life
+  of a process once initialised, so a running bobgpt would appear in
+  `nvidia-smi` forever and veto every shutdown. It is excluded **by cgroup**,
+  not by switching the GPU check off, so a hand-run training script still
+  vetoes.
+- `power_bobgpt_unit: bobgpt.service` — a completion request in the last hour
+  vetoes the shutdown, so the box cannot power off during a conversation.
+
+Net effect: left running and idle, the box still powers off overnight. In use,
+it does not.
+
+### The 3060 is shared
+
+`bobgpt_device` is `cuda:0`, the 3060 — and `gemma-4-12b` is llama-swap's
+resident-lane model, pinned to the same card, where a Q4 12B at 32k context
+takes most of its 12GB. A 124M model is around 0.7GB so it should still fit,
+but if both are loaded and something OOMs, move `bobgpt_device` to `cuda:1` or
+stop one of them. This is a variable because it is a judgement call per
+session, not a constant.
 
 ---
 
