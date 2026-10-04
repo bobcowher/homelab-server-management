@@ -404,20 +404,23 @@ gateway** (`172.17.0.1`) — not the host's loopback. **A service bound to
 `127.0.0.1` is unreachable from it.** llama-swap works precisely because it
 binds all interfaces too.
 
-What keeps bobgpt private is the firewall, not the bind address: ufw
-default-denies incoming and the firewall role allows `8100` **only** from
-`docker_bridge_subnet`, with no `lan_subnet` rule — so it is tighter than
-llama-swap, which is also reachable from the LAN.
+ufw default-denies incoming, and the firewall role allows `8100` from **two**
+sources: `docker_bridge_subnet`, so Open WebUI can reach it, and
+`lan_subnet`, so you can `curl` it from the desktop while iterating.
 
-Verified by experiment on 2026-10-04. With a listener on `0.0.0.0:8100`, the
-`open-webui` container gets `200` and the desktop gets nothing. Before the ufw
-rule existed, the container connection **timed out** regardless of bind
-address, which reads like a dead service rather than a blocked port — worth
-remembering the next time something on the host is unreachable from a
+**The Docker rule is not redundant, and it is the one that looks it.** Because
+the port is open to the LAN, it is easy to conclude the `172.16.0.0/12` rule
+is covered by the `192.168.1.0/24` one and remove it. It is not: container
+traffic arrives from a bridge address, which `lan_subnet` does not match.
+Delete it and the model dropdown breaks while every hand test from the desktop
+still passes. `verify.yml` asserts it for that reason.
+
+Verified by experiment on 2026-10-04: a listener on `0.0.0.0:8100` answers
+`200` both from inside the `open-webui` container and from the desktop. Before
+the Docker rule existed the container connection **timed out** regardless of
+bind address, which reads like a dead service rather than a blocked port —
+worth remembering the next time something on the host is unreachable from a
 container.
-
-`verify.yml` asserts both halves, because the "closed to the LAN" half is the
-one that would rot quietly.
 
 ### What protects the training checkpoints
 
@@ -435,6 +438,31 @@ the cache stays writable and the weights stay readable. `verify.yml` asserts
 
 So that line in the unit is load-bearing. Do not relax it to fix a permissions
 problem; fix the permissions.
+
+### Shared dataset readability
+
+bobgpt reads checkpoints that **beekeeper** writes: two services, two users,
+one tree. The setgid bit on `/data` fixes the *group* of new files, but not
+their *mode* — that comes from the writing process's umask. bobgpt could read
+those checkpoints only because `beekeeper.service` happens to run
+`UMask=0022`.
+
+A **default ACL** on `storage_ml_read_dirs` makes it structural instead: when
+a directory carries one, the umask is not applied to files created in it.
+
+Proven on 2026-10-04, writing as `beekeeper` under `umask 0077`:
+
+| | New file mode | bobgpt can read |
+|---|---|---|
+| With default ACL | `-rw-rw-r--` | yes |
+| Without | `-rw-------` | **no** |
+
+Without the ACL this would have failed only for runs written *after* a umask
+change, while older runs kept working — a slow and confusing shape of bug.
+
+To extend it to another shared tree, add the path to `storage_ml_read_dirs` in
+`hosts/lab/vars.yml`. Keep the list short; it is for data genuinely shared
+between services, not a blanket loosening.
 
 ### How it interacts with the overnight poweroff
 

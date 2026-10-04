@@ -713,29 +713,35 @@
       become: true
       tags: [bobgpt, firewall]
 
-    # Both halves matter, and the second is the one that would rot quietly.
+    # The Docker rule is the one that matters here, and it is the one that
+    # looks redundant.
     #
-    # bobgpt binds 0.0.0.0 because Open WebUI is a container and reaches host
-    # services through the Docker bridge gateway, where a loopback bind is
-    # unreachable. That means the FIREWALL is the only thing keeping the
-    # service off the LAN, so "allowed from docker" and "not allowed from the
-    # LAN" are both load-bearing. Verified by experiment on 2026-10-04: from
-    # the open-webui container a listener on this port answers 200, and from
-    # the desktop the same listener is unreachable.
-    - name: bobgpt's port is open to containers and closed to the LAN
+    # bobgpt is reachable from the LAN (Robert curls it from the desktop while
+    # iterating), so it would be easy to conclude the 172.16.0.0/12 rule is
+    # covered by the 192.168.1.0/24 one and delete it. It is not: Open WebUI
+    # is a container, it reaches host services through the Docker bridge
+    # gateway, and that traffic arrives with a bridge source address that
+    # lan_subnet does not match. Removing it breaks the model dropdown while
+    # every hand test from the desktop still passes.
+    #
+    # Verified by experiment on 2026-10-04: before this rule existed, a
+    # request from inside the open-webui container timed out no matter what
+    # the service bound to.
+    #
+    # The loopback check belongs with it for the same reason -- a 127.0.0.1
+    # bind is unreachable from the container even with both rules present.
+    - name: bobgpt's port is reachable from containers, not only the LAN
       ansible.builtin.assert:
         that:
           - bobgpt_port | string ~ '/tcp' in bobgpt_ufw.stdout
           - docker_bridge_subnet in bobgpt_port_rules
-          - lan_subnet not in bobgpt_port_rules
           - bobgpt_host != '127.0.0.1'
         fail_msg: >-
-          bobgpt's port {{ bobgpt_port }} is not scoped correctly. ufw rules
-          mentioning it: {{ bobgpt_port_rules | default('none') }}. It must be
-          allowed from {{ docker_bridge_subnet }} (or Open WebUI cannot reach
-          it at all) and must NOT be allowed from {{ lan_subnet }} (the
-          firewall is what keeps it private, since it binds
-          {{ bobgpt_host }}).
+          bobgpt's port {{ bobgpt_port }} is not reachable from containers.
+          ufw rules mentioning it: {{ bobgpt_port_rules | default('none') }};
+          bind address is {{ bobgpt_host }}. It must be allowed from
+          {{ docker_bridge_subnet }} and must not bind loopback, or Open WebUI
+          cannot reach it -- regardless of any {{ lan_subnet }} rule.
       vars:
         bobgpt_port_rules: >-
           {{ bobgpt_ufw.stdout_lines

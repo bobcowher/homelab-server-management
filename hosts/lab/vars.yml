@@ -6,6 +6,15 @@ data_root: /data
 # arrive from here, not from lan_subnet, so they need their own firewall rule.
 docker_bridge_subnet: 172.16.0.0/12
 
+# Trees where group ml must be able to READ everything, now and in future,
+# independent of the umask of whatever process writes there. Applied as both a
+# regular and a default ACL by the storage role. Keep this list short: it is
+# for data genuinely shared between services, not a blanket loosening.
+storage_ml_read_dirs:
+  # bobgpt serves checkpoints that beekeeper writes. Two services, two users,
+  # one tree -- exactly the case setgid alone does not cover.
+  - "{{ data_root }}/datasets/bobgptv1/checkpoints"
+
 # Central. Host shipped as UTC; this is a deliberate change.
 timezone: America/Chicago
 

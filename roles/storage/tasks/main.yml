@@ -37,3 +37,56 @@
     - "{{ data_root }}/models"
     - "{{ data_root }}/datasets"
     - "{{ data_root }}/beekeeper"
+
+# setgid above fixes the GROUP of new files. It does nothing about their MODE,
+# which comes from the writing process's umask -- so a service with
+# UMask=0077 would create 0600 files that group ml owns and cannot read.
+#
+# That is not theoretical. bobgpt reads training checkpoints written by
+# beekeeper purely because beekeeper.service happens to run UMask=0022. If
+# that ever changed, bobgpt would lose access to NEWLY written runs only,
+# while old ones kept working -- a slow, confusing failure.
+#
+# A default ACL makes it structural: when a directory has one, the umask is
+# not applied to files created in it at all. Verified by experiment on
+# 2026-10-04 -- see docs/RUNBOOK.md, "Shared dataset readability".
+- name: Install acl tooling
+  ansible.builtin.apt:
+    name: acl
+    state: present
+
+- name: Check which shared trees exist
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  register: storage_acl_stat
+  loop: "{{ storage_ml_read_dirs | default([]) }}"
+
+# Two passes, and both are needed. The first fixes files that already exist;
+# the second sets the DEFAULT entry that new files inherit. Neither implies
+# the other.
+- name: Grant group ml read on what is already there
+  ansible.posix.acl:
+    path: "{{ item.item }}"
+    entity: ml
+    etype: group
+    permissions: rX
+    recursive: true
+    state: present
+  loop: "{{ storage_acl_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists and item.stat.isdir
+
+- name: Grant group ml read on what gets written later
+  ansible.posix.acl:
+    path: "{{ item.item }}"
+    entity: ml
+    etype: group
+    permissions: rX
+    default: true
+    recursive: true
+    state: present
+  loop: "{{ storage_acl_stat.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists and item.stat.isdir

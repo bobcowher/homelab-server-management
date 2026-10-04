@@ -22,6 +22,7 @@
   loop:
     - "8080"   # llama-swap
     - "5000"   # beekeeper
+    - "{{ bobgpt_port }}"   # bobgpt, for curling it from the desktop
 
 # Beekeeper starts a TensorBoard for each training run and assigns it the
 # first free port it finds, scanning upward from 6006. These are per-run and
@@ -56,11 +57,9 @@
 # connection from the open-webui container TIMES OUT no matter what the
 # service binds to, which reads like a dead service rather than a blocked one.
 #
-# Deliberately NOT also allowed from lan_subnet. Unlike llama-swap, nothing
-# outside the container network needs this, so bobgpt can bind 0.0.0.0 and
-# still be unreachable from the LAN -- the firewall is what keeps it private,
-# not the bind address. Add a lan_subnet rule only if you want to curl it
-# from the desktop.
+# This rule is still required even though bobgpt is now also allowed from the
+# LAN: container traffic arrives from a bridge address, which lan_subnet does
+# not match.
 - name: Allow containers to reach bobgpt on the host
   community.general.ufw:
     rule: allow
