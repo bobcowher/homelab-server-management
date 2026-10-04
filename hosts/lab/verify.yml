@@ -558,6 +558,36 @@
           record of a machine check surviving the nightly poweroff.
       tags: [tools]
 
+    - name: Read the enforced GPU power limits
+      ansible.builtin.command: >-
+        nvidia-smi --query-gpu=index,enforced.power.limit
+        --format=csv,noheader,nounits
+      register: gpu_pl
+      changed_when: false
+      tags: [nvidia]
+
+    # Reads the LIVE enforced value, not the unit file. Power limits are driver
+    # state and reset on every reboot, so the only question worth asking is
+    # whether the card is actually capped right now -- a unit that exists but
+    # failed, or a driver upgrade that reset the cap, both look fine on disk.
+    #
+    # enforced.power.limit rather than power.limit: enforced is what the
+    # hardware is applying, and the two can differ.
+    - name: Each GPU is capped where vars.yml says
+      ansible.builtin.assert:
+        that:
+          - (gpu_pl.stdout_lines
+             | select('match', '^' ~ item.index ~ ',')
+             | first).split(',')[1] | trim | float | round | int == item.watts
+        fail_msg: >-
+          GPU {{ item.index }} should be capped at {{ item.watts }}W but
+          nvidia-smi reports: {{ gpu_pl.stdout_lines | join(' | ') }}. The cap
+          resets on reboot, so check gpu-power-limit.service.
+      loop: "{{ gpu_power_limits | default([]) }}"
+      loop_control:
+        label: "GPU {{ item.index }} @ {{ item.watts }}W"
+      tags: [nvidia]
+
     # --- bobgpt ---------------------------------------------------------------
     #
     # This host is provisioned for a server whose code lives in

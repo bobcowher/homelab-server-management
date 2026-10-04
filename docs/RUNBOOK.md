@@ -26,11 +26,12 @@ for convenience; if the two ever disagree, this one is right.
 6. [bobgpt](#bobgpt)
 7. [Routine changes](#routine-changes)
 8. [Overnight power saving](#overnight-power-saving)
-9. [Upgrades and holds](#upgrades-and-holds)
-10. [When it breaks](#when-it-breaks)
-11. [Sensors and memory faults](#sensors-and-memory-faults)
-12. [Handle with care](#handle-with-care)
-13. [Known gaps](#known-gaps)
+9. [GPU power and heat](#gpu-power-and-heat)
+10. [Upgrades and holds](#upgrades-and-holds)
+11. [When it breaks](#when-it-breaks)
+12. [Sensors and memory faults](#sensors-and-memory-faults)
+13. [Handle with care](#handle-with-care)
+14. [Known gaps](#known-gaps)
 
 ---
 
@@ -672,6 +673,72 @@ runs missed while the box was off, so switching it on would power it straight
 back down. `verify.yml` asserts this is off, and asserts the inverse too — that
 a disabled timer is actually stopped, which caught a handler re-arming a feature
 that config said was off.
+
+---
+
+## GPU power and heat
+
+The 3090 is capped at **260 W** of its 350 W default, applied at boot by
+`gpu-power-limit.service` from `gpu_power_limits` in `hosts/lab/vars.yml`. The
+3060 is left at its 170 W default.
+
+**Why a unit and not a command.** Power limits are *driver* state, not firmware
+state: they reset on every reboot, and this box reboots every morning. A limit
+set by hand is gone by tomorrow and nothing reports it. `verify.yml` asserts
+the live `enforced.power.limit`, so a failed unit or a driver upgrade that
+resets the cap is caught.
+
+### The measured curve
+
+bf16 matmul on the 3090, 30 s warmup + 60 s measured, 2026-10-04. Reproduce
+with `scripts/gpu_power_sweep.py`.
+
+| Limit | TFLOPS | Slower by | Peak heat | Total energy/job | GFLOPS/W |
+|---|---|---|---|---|---|
+| 350 W | 72.34 | — | — | — | 207.3 |
+| 320 W | 69.61 | 3.9% | −8.5% | −5.0% | 218.1 |
+| 290 W | 66.24 | 9.2% | −17.1% | −9.5% | 229.1 |
+| **260 W** | **62.07** | **16.5%** | **−25.7%** | **−13.4%** | **239.4** |
+| 230 W | 56.65 | 27.7% | −34.7% | −16.6% | 248.7 |
+
+**Efficiency rises as the cap falls** (207 → 249 GFLOPS/W), so a fixed job at
+260 W uses 13% *less total energy*, not merely a lower peak. You pay in
+wall-clock time, not in kilowatt-hours. On an 8-hour run, 260 W finishes in
+about 9h19m.
+
+Ignore temperature as a tuning signal here: the sweep measured 320 W *cooler*
+than 290 W, which is fan ramp plus 60 s being far too short for a 3090 to
+reach thermal steady state. Watts are what heat the room, and watts are what a
+power cap bounds.
+
+### Raising or lowering it for one session
+
+```bash
+sudo nvidia-smi -i 1 -pl 290     # or any value in 100..400
+```
+
+That holds until the next reboot, when the unit restores the configured value.
+The thing that makes power limits annoying to manage is what makes this safe:
+there is no cleanup to forget.
+
+To change it permanently, edit `gpu_power_limits` and apply the `nvidia` tag.
+
+### Locked clocks were measured and rejected
+
+`nvidia-smi -lgc` was measured as an alternative across 1400–1700 MHz. At
+matched wattage it was indistinguishable from a power cap — every gap inside
+the 0.25% run-to-run noise. A power cap is preferred regardless, because it
+bounds **watts**, which is the thing that heats the room; a locked clock bounds
+clocks and lets power float with the workload.
+
+### What is not available
+
+Fan curves. They need `nvidia-settings`, which needs an X server, and this box
+is headless. There is no way to trade fan noise for temperature here.
+
+Direct voltage control. No consumer GeForce exposes a voltage setter on Linux.
+The practical equivalent is a GPC clock offset at a fixed power cap — see
+"Clock offsets" below if that is ever pursued.
 
 ---
 

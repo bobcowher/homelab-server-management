@@ -40,6 +40,30 @@ check() {
     fi
 }
 
+# Inverse of check(): the text must NOT appear. Needed because some properties
+# are only expressible negatively -- "this signal did not veto" is not the same
+# claim as "nothing vetoed", and conflating them makes a test depend on whatever
+# else happens to be running on the box.
+check_absent() {
+    local label="$1" forbidden="$2"; shift 2
+    local copy="$WORK/case.sh"
+    cp "$REAL" "$copy"
+    for expr in "$@"; do sed -i "$expr" "$copy"; done
+    chmod +x "$copy"
+
+    local out
+    out=$("$copy" --dry-run 2>&1)
+    if grep -qF "$forbidden" <<<"$out"; then
+        echo "FAIL  $label"
+        echo "      expected NOT to find: $forbidden"
+        sed 's/^/      | /' <<<"$out"
+        fail=$(( fail + 1 ))
+    else
+        echo "PASS  $label"
+        pass=$(( pass + 1 ))
+    fi
+}
+
 echo "== sar history =="
 
 # 1400 minutes back forces start_day != now_day, which is exactly what happens
@@ -87,11 +111,14 @@ check "the uptime veto reports the actual uptime" "uptime  " \
 
 # A zero minimum must not veto, or the guard would pin the box awake forever
 # and every overnight shutdown would stop working.
-check "uptime over the minimum does not veto" "Idle on every signal" \
-    's/^MIN_UPTIME_MINUTES=.*/MIN_UPTIME_MINUTES=0/' \
-    's/^LOAD_MAX=.*/LOAD_MAX="999"/' \
-    's/^CPU_MAX=.*/CPU_MAX="999"/' \
-    's/^sessions=.*/sessions=0/'
+#
+# Asserted as the ABSENCE of the uptime veto, not as "Idle on every signal".
+# The first version demanded the whole box be idle, which was true only while
+# nothing ran on it -- it started failing the moment bobgpt became a real
+# service whose requests legitimately veto. A test for one signal must not
+# depend on every other signal being quiet.
+check_absent "uptime over the minimum does not veto" "under the" \
+    's/^MIN_UPTIME_MINUTES=.*/MIN_UPTIME_MINUTES=0/'
 
 echo
 echo "== beekeeper =="

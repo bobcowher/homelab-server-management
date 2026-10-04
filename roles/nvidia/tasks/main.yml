@@ -70,6 +70,29 @@
     update_cache: true
     # Absent from Ubuntu's own repositories by design.
 
+# Power limits are driver state, not firmware state: they reset on every
+# reboot, and lab reboots every morning. A limit set by hand is therefore gone
+# by tomorrow, silently. This unit is what makes it stick, and verify.yml
+# asserts the live value matches what the repo says so a driver upgrade or a
+# manual override cannot drift unnoticed.
+- name: Install the GPU power limit unit
+  ansible.builtin.template:
+    src: gpu-power-limit.service.j2
+    dest: /etc/systemd/system/gpu-power-limit.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reapply GPU power limits
+  when: gpu_power_limits | default([]) | length > 0
+
+- name: Enable the GPU power limit unit
+  ansible.builtin.systemd_service:
+    name: gpu-power-limit.service
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: gpu_power_limits | default([]) | length > 0
+
 - name: Gather installed package facts
   ansible.builtin.package_facts:
     manager: apt

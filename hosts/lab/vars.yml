@@ -308,6 +308,41 @@ power_gpu_exclude_unit: "bobgpt.service"
 # mid-conversation.
 power_bobgpt_unit: "bobgpt.service"
 
+# --- GPU power limits --------------------------------------------------------
+#
+# Applied at boot by roles/nvidia (gpu-power-limit.service), because power
+# limits are DRIVER state, not firmware state: they reset on every reboot and
+# this box reboots every morning. A limit set by hand is gone by tomorrow.
+#
+# Measured on 2026-10-04 with scripts/gpu_power_sweep.py, bf16 matmul on the
+# 3090. Full curve in docs/RUNBOOK.md:
+#
+#   350W  72.34 TFLOPS    --      207 GFLOPS/W
+#   320W  69.61          -3.9%    218
+#   290W  66.24          -9.2%    229
+#   260W  62.07         -16.5%    239      <- chosen
+#   230W  56.65         -27.7%    249
+#
+# 260W trades roughly 35 extra minutes per 8-hour run for 90W less continuous
+# heat in the office. Robert's call, taking the heat over the throughput.
+#
+# Note the second-order win: efficiency RISES as the cap falls (207 -> 239
+# GFLOPS/W), so a fixed job at 260W uses 13% less total energy, not just a
+# lower peak. Slower, but less heat overall.
+#
+# Locked clocks (nvidia-smi -lgc) were measured as an alternative and were
+# indistinguishable at matched wattage, within the 0.25% run-to-run noise. A
+# power cap is preferred anyway: it bounds WATTS, which is the thing that heats
+# the room, whereas a locked clock bounds clocks and lets power float with the
+# workload.
+#
+# The 3060 is left at its 170W default. It caps at 170W and mostly idles.
+gpu_power_limits:
+  - index: 1
+    watts: 260
+    comment: >-
+      RTX 3090. 260W of 350W default: -16.5% throughput for -26% heat.
+
 # --- bobgpt ------------------------------------------------------------------
 #
 # A from-scratch GPT server from github.com/bobcowher/bobgptv1, served behind

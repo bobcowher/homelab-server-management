@@ -1,0 +1,23 @@
+# Managed by Ansible. See roles/nvidia/tasks/main.yml.
+[Unit]
+Description=Apply GPU power limits
+Documentation=https://github.com/bobcowher/homelab-server-management/blob/main/docs/RUNBOOK.md
+# Power limits live in the loaded driver, not in firmware, so they are lost on
+# every reboot -- and this box reboots every morning. Without a unit, a limit
+# set by hand is gone by tomorrow and nothing reports it.
+After=local-fs.target
+# nvidia-smi loads the kernel module itself if it is not already up, so there
+# is nothing else to wait for.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+{% for g in gpu_power_limits | default([]) %}
+{% if g.comment is defined %}
+# {{ g.comment }}
+{% endif %}
+ExecStart=/usr/bin/nvidia-smi -i {{ g.index }} -pl {{ g.watts }}
+{% endfor %}
+
+[Install]
+WantedBy=multi-user.target
