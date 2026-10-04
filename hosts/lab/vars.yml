@@ -321,10 +321,11 @@ bobgpt_user: bobgpt
 bobgpt_root: /opt/bobgpt
 bobgpt_repo: https://github.com/bobcowher/bobgptv1.git
 
-# Bootstrap only. Ansible clones once and never updates, so a `git pull` or a
-# branch switch from deploy.sh is never reverted -- change the branch on the
-# box, not here.
-bobgpt_branch: fastapi
+# Bootstrap only, and matched to what deploy.sh checks out (it does a
+# `git reset --hard origin/develop`). Ansible clones once and never updates, so
+# deploy.sh is free to switch branches and a playbook run will not revert it --
+# this value only decides what a freshly provisioned host starts on.
+bobgpt_branch: develop
 
 # NOT loopback, and this is not laxness. Open WebUI runs in a container and
 # reaches host services via host.docker.internal, which resolves to the Docker

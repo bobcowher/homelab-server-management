@@ -205,12 +205,18 @@ survives:
 The checkout is owned by `robertcowher:ml`, so `git pull` needs no sudo. Only
 the restart does, and that grant already exists.
 
-```bash
-# llm_bobgpt/deploy.sh, run on lab
-git pull
-pip install -r requirements-serve.txt      # into the bobgpt conda env
-sudo systemctl restart bobgpt
-```
+**Corrected 2026-10-04:** `deploy.sh` runs from the **desktop** and ssh's in,
+modelled on `beekeeper/deploy.sh` — not on lab as first written here. It
+sources `/etc/bobgpt/host.env` over ssh, resets the checkout to
+`origin/develop`, builds the venv from `$BOBGPT_PYTHON` when missing, installs
+`requirements-serve.txt`, links `checkpoints` at `$BOBGPT_CHECKPOINT_ROOT`,
+restarts the service, and then polls `/v1/models` **over ssh on lab**, so the
+health check does not depend on the port being LAN-reachable.
+
+That shifts nothing onto this repo. All five prerequisites were verified on
+2026-10-04: the `lab` ssh alias resolves for `robertcowher`,
+`/etc/bobgpt/host.env` is world-readable, the checkout is writable by
+`robertcowher`, `sudo` is non-interactive, and `origin/develop` exists.
 
 Ansible does not manage Python dependencies at all. It creates
 `/opt/bobgpt` owned by `robertcowher:ml` and publishes `BOBGPT_PYTHON`
