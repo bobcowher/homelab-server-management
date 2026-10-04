@@ -14,6 +14,18 @@ be deployable from the `llm_bobgpt` repository alone.
 Non-goals: inference speed, quantisation, multi-user concurrency, exposing
 bobgpt outside the LAN.
 
+## Ownership
+
+**This repository does deployment only.** `github.com/bobcowher/bobgptv1` is
+owned by Robert and another agent; nothing here creates, edits or commits a
+file in it. Clarified by Robert on 2026-10-04: *"Your work is 100%
+deployment. Think of yourself as a DevOps engineer."*
+
+The sections below describing the server are therefore a **contract**, not a
+work plan for this side: they record what the host provides and what the
+repository must provide in return. The host-side work is planned in
+`docs/superpowers/plans/2026-10-04-bobgpt-host-plumbing.md`.
+
 ## What already exists
 
 - `llm_bobgpt/api.py` is an OpenAI-compatible FastAPI app: `GET /v1/models`
@@ -103,7 +115,8 @@ run, a checkpoint file, a model size, a config constant, or a version.
 |---|---|
 | `bobgpt` system user, member of group `ml` | needs root; `ml` grants read on the checkpoint tree |
 | The clone: destination path and branch | something must place the code |
-| A conda env named `bobgpt`, declared in `conda_envs` with its Python version only | needs root; shared envs live under `/opt/conda` |
+| `/opt/bobgpt`, owned `robertcowher:ml` — the checkout and venv live here | needs root to create under `/opt` |
+| `BOBGPT_PYTHON`, the interpreter the venv must be built from | torch has no wheels for the 3.14 that ships natively |
 | The systemd unit, whose `ExecStart` is a script **in** `llm_bobgpt` | needs root to install |
 | `BOBGPT_CHECKPOINT_ROOT`, `BOBGPT_DEVICE`, `BOBGPT_PORT`, `BOBGPT_MAX_LOADED` as `Environment=` | host paths and hardware |
 | The bind address and port: `127.0.0.1:8100` | must not collide with 3000/5000/8080, and must not reach the LAN |
@@ -140,7 +153,7 @@ that merges both upstreams under one base URL.
 This is the one piece of the design that is a genuine one-time change in this
 repository. After it, nothing here needs to change for bobgpt again.
 
-## Service design (implemented in `llm_bobgpt`)
+## Service design (owned by `bobgptv1`, recorded here as the contract)
 
 `serve.sh` starts uvicorn against `api.py`, which gains:
 
@@ -180,13 +193,16 @@ pip install -r requirements-serve.txt      # into the bobgpt conda env
 sudo systemctl restart bobgpt
 ```
 
-Ansible creates the empty `bobgpt` conda env (it needs root, because the
-shared envs live under `/opt/conda`) and declares nothing about its contents
-beyond the Python version. Package installation is `deploy.sh`'s job, from
-`requirements-serve.txt` in the `llm_bobgpt` repository, so adding a
-dependency never requires an Ansible change. The shared envs are otherwise
-read-only by convention; this one is writable by group `ml` as the documented
-exception, because its contents are deployed rather than configured.
+Ansible does not manage Python dependencies at all. It creates
+`/opt/bobgpt` owned by `robertcowher:ml` and publishes `BOBGPT_PYTHON`
+(`/opt/conda/envs/py312/bin/python3.12`, because torch has no wheels for the
+3.14 that ships natively). Building the venv and installing into it is
+`deploy.sh`'s job. Adding a dependency therefore never touches this
+repository, and no package name or version appears in it.
+
+Because the checkout is owned by `robertcowher` rather than by the service
+user, `git pull` and `pip install` need no sudo. Only the restart does, and
+that grant already exists.
 
 `requirements.txt` currently pulls in `tensorflow`, needed only by
 `gpt_download.py`. A separate `requirements-serve.txt` keeps several hundred
@@ -248,14 +264,21 @@ configuration, and it is the reason the others are not sufficient.
 The work divides into two independent streams that meet only at the HTTP
 contract, so they can be built and tested in either order:
 
-- **`llm_bobgpt`**: discovery, architecture inference, the LRU, the three
-  streaming layers, `serve.sh`, `requirements-serve.txt`, `deploy.sh`, and the
-  text-stream unit tests. Testable entirely on the desktop with no GPU.
-- **This repo**: the `bobgpt` user and conda env, the clone, the unit, the
-  Open WebUI upstream, the two power-role changes, and the `verify.yml`
-  assertions.
+- **`bobgptv1`** (Robert and another agent): discovery, architecture
+  inference, the LRU, wiring the streaming layers into `api.py`, `serve.sh`,
+  `requirements-serve.txt`, and `deploy.sh`. As of 2026-10-04 layers 1 and 2
+  are already built there and uncommitted on branch `fastapi`: `generate()`
+  now delegates to `generate_streaming()`, and `text_stream.py` implements the
+  stop-holdback, trailing-whitespace and split-UTF-8 handling with six tests
+  in `tests/test_text_stream.py`. What remains is layer 3 — wiring it into
+  `api.py`, which still matches stop strings per token.
+- **This repo** (deployment): the `bobgpt` user, `/opt/bobgpt`, the host facts
+  file, the bootstrap clone, the unit, the Open WebUI upstream, the two
+  power-role changes, the `verify.yml` assertions, and the RUNBOOK.
 
-Each gets its own implementation plan.
+The only coupling is the contract above, so the two can proceed in either
+order. The host side is useful before the repo side exists: it provisions
+everything and warns, legibly, that `serve.sh` is still missing.
 
 ## Open questions
 
