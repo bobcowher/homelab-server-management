@@ -336,8 +336,39 @@ power_bobgpt_unit: "bobgpt.service"
 # the room, whereas a locked clock bounds clocks and lets power float with the
 # workload.
 #
-# The 3060 is left at its 170W default. It caps at 170W and mostly idles.
 gpu_power_limits:
+  - index: 0
+    # The same fraction of default as the 3090: 260/350 = 74.3%, and
+    # 74.3% of 170W is 126W. Not independently swept -- the 3060 contributes
+    # far less heat, so Robert accepted the 3090's ratio rather than spend
+    # another measurement on it.
+    #
+    # This card hosts the INTERACTIVE services (bobgpt, and gemma-4-12b in
+    # llama-swap's resident lane) rather than batch training, so the worry was
+    # that a cap would be felt in chat latency in a way it never is on an
+    # overnight run.
+    #
+    # Measured, and the worry was unfounded. The 3060 sits much closer to its
+    # efficiency sweet spot than a 3090 pushed to 350W, so it gives up almost
+    # nothing:
+    #
+    #   170W stock, offset 0      26.97 TFLOPS
+    #   126W cap,   offset 0      26.34 TFLOPS   -2.3%
+    #   126W cap,   offset +100   27.06 TFLOPS   +0.3%  <- applied
+    #
+    # So the capped-and-offset card is indistinguishable from stock (+0.3% is
+    # inside the ~1.2% noise) while drawing 26% less power. Effectively free.
+    #
+    # Both figures were taken with bobgpt idle-resident on the card, so they
+    # compare fairly, but neither is a clean sweep: gpu_power_sweep.py refuses
+    # to run while another process holds the GPU, which it did. Re-measure
+    # properly with bobgpt stopped if these numbers ever need to be trusted
+    # harder than "the cap is free".
+    watts: 126
+    offset_mhz: 100
+    comment: >-
+      RTX 3060. 126W of 170W default (same 74% ratio as the 3090),
+      +100MHz offset. Hosts the interactive services.
   - index: 1
     watts: 260
     # A positive clock offset at a FIXED cap is the headless equivalent of an

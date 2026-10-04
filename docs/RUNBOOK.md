@@ -768,6 +768,29 @@ Re-measure with `scripts/gpu_power_sweep.py` and the offset test after any
 driver upgrade; a driver can shift the voltage/frequency curve underneath these
 numbers.
 
+### The 3060
+
+Capped at **126 W** of 170 W — the same 74% ratio as the 3090 — with the same
++100 MHz offset, and it is effectively free:
+
+| Setting | TFLOPS | vs stock |
+|---|---|---|
+| 170 W stock | 26.97 | — |
+| 126 W | 26.34 | −2.3% |
+| **126 W +100 MHz** | **27.06** | **+0.3%** |
+
+The concern going in was that this card hosts the *interactive* services
+(bobgpt, gemma) where latency is felt, unlike the 3090's batch training. It
+turned out not to matter: a 3060 sits far closer to its efficiency sweet spot
+than a 3090 pushed to 350 W, so capping it costs almost nothing. +0.3% is
+inside the noise, so read it as "indistinguishable from stock at 26% less
+power".
+
+Neither figure is a clean sweep — `gpu_power_sweep.py` refuses to run while
+another process holds the GPU, and bobgpt is resident there. Both numbers were
+taken with bobgpt idle-resident so they compare fairly, but stop bobgpt first
+if they ever need to be trusted harder than "the cap is free".
+
 ### Persistence mode is load-bearing
 
 Both capped GPUs run with persistence mode on, set by the same unit **before**

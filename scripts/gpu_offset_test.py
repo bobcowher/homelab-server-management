@@ -13,6 +13,12 @@ gradients that still converge are far worse than a hang. So every step is
 compared BIT-EXACT against the offset-0 reference and the run aborts on the
 first mismatch or new Xid. Throughput is only interesting if correctness holds.
 
+Unlike gpu_power_sweep.py this does NOT refuse to run while another process
+holds the GPU, and that is deliberate. Contention skews throughput but cannot
+affect bit-exactness, and correctness is what this script exists to decide --
+so it stays usable on a card with a resident service. Read its TFLOPS figures
+as indicative only when something else is loaded.
+
 Memory offsets are deliberately never touched: temperature.memory reads N/A on
 this driver, so the 3090's hottest component is invisible.
 
