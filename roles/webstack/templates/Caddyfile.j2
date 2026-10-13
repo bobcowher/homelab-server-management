@@ -19,6 +19,16 @@
 		redir http://lab.local:5000/ 302
 	}
 
+	# SonarQube is NOT proxied, for a different reason than beekeeper. It
+	# supports subpath hosting properly via sonar.web.context, so a proxy
+	# would work -- but setting a context path makes the browser URL and the
+	# scanner URL different strings, and getting the scanner URL wrong is a
+	# confusing failure. One URL for both is worth more than one fewer port.
+	redir /sonar /sonar/
+	handle /sonar/* {
+		redir http://lab.local:{{ sonarqube_port }}/ 302
+	}
+
 	handle {
 		reverse_proxy open-webui:8080
 	}

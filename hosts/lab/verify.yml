@@ -1005,6 +1005,28 @@
           will not work.
       tags: [sonarqube]
 
+    - name: Read the ufw rules
+      ansible.builtin.command: ufw status
+      become: true
+      register: sonarqube_ufw
+      changed_when: false
+      tags: [sonarqube]
+
+    # Only from the LAN. Deliberately NO docker_bridge_subnet rule: nothing in
+    # a container talks to SonarQube, unlike bobgpt and llama-swap, so that
+    # rule would be real surface for no gain. If something containerised ever
+    # needs to scan, add it then and say why.
+    - name: SonarQube is reachable from the LAN and nowhere else
+      ansible.builtin.assert:
+        that:
+          - sonarqube_ufw.stdout is search(sonarqube_port | string ~ '/tcp\s+ALLOW\s+' ~ (lan_subnet | regex_escape))
+          - not (sonarqube_ufw.stdout is search(sonarqube_port | string ~ '/tcp\s+ALLOW\s+Anywhere'))
+        fail_msg: >-
+          ufw does not allow {{ sonarqube_port }}/tcp from {{ lan_subnet }}
+          only. Rules:
+          {{ sonarqube_ufw.stdout }}
+      tags: [sonarqube]
+
     # --- bobgpt ---------------------------------------------------------------
     #
     # This host is provisioned for a server whose code lives in

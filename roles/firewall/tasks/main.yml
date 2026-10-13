@@ -23,6 +23,10 @@
     - "8080"   # llama-swap
     - "5000"   # beekeeper
     - "{{ bobgpt_port }}"   # bobgpt, for curling it from the desktop
+    # SonarQube. The browser and the scanner both come from the LAN, and both
+    # use this one port -- which is why the Caddy entry is a redirect rather
+    # than a proxy.
+    - "{{ sonarqube_port }}"
 
 # Beekeeper starts a TensorBoard for each training run and assigns it the
 # first free port it finds, scanning upward from 6006. These are per-run and
