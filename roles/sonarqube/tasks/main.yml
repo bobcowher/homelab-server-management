@@ -247,3 +247,35 @@
     enabled: true
     state: started
     daemon_reload: true
+
+# --- scanner -----------------------------------------------------------------
+- name: Download the CLI scanner
+  ansible.builtin.get_url:
+    url: >-
+      https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-{{ sonarqube_scanner_version }}-linux-x64.zip
+    dest: /opt/sonar-scanner-cli-{{ sonarqube_scanner_version }}.zip
+    checksum: "sha256:{{ sonarqube_scanner_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Unpack the CLI scanner
+  ansible.builtin.unarchive:
+    src: /opt/sonar-scanner-cli-{{ sonarqube_scanner_version }}.zip
+    dest: /opt
+    remote_src: true
+    owner: root
+    group: root
+    creates: /opt/sonar-scanner-{{ sonarqube_scanner_version }}-linux-x64
+
+- name: Link the scanner to a stable path
+  ansible.builtin.file:
+    src: /opt/sonar-scanner-{{ sonarqube_scanner_version }}-linux-x64
+    dest: "{{ sonarqube_scanner_root }}"
+    state: link
+
+- name: Put the scanner on PATH
+  ansible.builtin.file:
+    src: "{{ sonarqube_scanner_root }}/bin/sonar-scanner"
+    dest: /usr/local/bin/sonar-scanner
+    state: link

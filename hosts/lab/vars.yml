@@ -501,3 +501,19 @@ sonarqube_keep_releases: 3
 # takes 60-90s cold on this box, so this is generous on purpose: a rollback
 # triggered by impatience would be worse than a slow deploy.
 sonarqube_start_timeout: 300
+
+# The CLI scanner, on lab so that scripts/smoke_sonarqube.sh can run on the
+# box itself rather than depending on a working desktop. Pinned by version AND
+# sha256 -- the llama_swap_version precedent -- because this is a third-party
+# binary, unlike the fork, which is built from source Robert controls.
+#
+# Robert normally scans from the desktop; this exists for validation, and
+# scanning from lab is a side benefit. The zip bundles its own JRE, so this
+# does not depend on the host's Java 21.
+#
+# To move it: download the new zip, sha256sum it, and change both lines
+# together. get_url verifies the checksum, so a mismatched pair fails the
+# apply rather than installing an unverified binary.
+sonarqube_scanner_version: "8.1.0.6389"
+sonarqube_scanner_sha256: "bb8f709f9cb73352f8d1260a3b3c506c0f41146754bc630762c126d795499d0b"
+sonarqube_scanner_root: /opt/sonar-scanner
