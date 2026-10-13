@@ -111,6 +111,85 @@
   become: true
   become_user: postgres
 
+# --- service account and layout ----------------------------------------------
+#
+# A system account with no login and no home. Not in group ml: SonarQube reads
+# nothing on /data except its own tree, and adding it to ml would hand a
+# network-facing web server read access to every training checkpoint on the
+# box for no reason at all.
+- name: Create the SonarQube service user
+  ansible.builtin.user:
+    name: "{{ sonarqube_user }}"
+    system: true
+    create_home: false
+    home: "{{ sonarqube_root }}"
+    shell: /usr/sbin/nologin
+
+# Owned by robertcowher, NOT the service account, so `git reset` and
+# `./gradlew` from sonarqube-deploy need no sudo at all. Only the unpack, the
+# symlink flip and the restart do. Same reasoning as /opt/bobgpt.
+- name: Create the SonarQube tree
+  ansible.builtin.file:
+    path: "{{ sonarqube_root }}"
+    state: directory
+    owner: robertcowher
+    group: "{{ sonarqube_user }}"
+    mode: "0755"
+
+# Unpacked releases, owned by the service account because that is what reads
+# them. robertcowher writes here via sudo during a deploy.
+- name: Create the releases directory
+  ansible.builtin.file:
+    path: "{{ sonarqube_root }}/releases"
+    state: directory
+    owner: "{{ sonarqube_user }}"
+    group: "{{ sonarqube_user }}"
+    mode: "0755"
+
+- name: Create the state directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ sonarqube_user }}"
+    group: "{{ sonarqube_user }}"
+    mode: "0750"
+  loop:
+    - "{{ sonarqube_data_dir }}"
+    - "{{ sonarqube_data_dir }}/data"
+    - "{{ sonarqube_data_dir }}/temp"
+    - "{{ sonarqube_log_dir }}"
+
+# update: false is load-bearing, and it is the same lesson as /opt/bobgpt/src:
+# sonarqube-deploy owns this checkout from here on, and an updating clone would
+# reset it on every apply -- silently reverting a deploy that was testing a
+# branch. This value decides only what a freshly provisioned host starts on.
+- name: Bootstrap the fork checkout
+  ansible.builtin.git:
+    repo: "{{ sonarqube_repo }}"
+    dest: "{{ sonarqube_root }}/src"
+    version: "{{ sonarqube_branch }}"
+    update: false
+  become: true
+  become_user: robertcowher
+
+- name: Install the service environment file
+  ansible.builtin.template:
+    src: sonarqube.env.j2
+    dest: /etc/sonarqube/sonarqube.env
+    owner: root
+    group: "{{ sonarqube_user }}"
+    mode: "0640"
+  no_log: true
+  notify: Restart sonarqube
+
+- name: Install the deploy environment file
+  ansible.builtin.template:
+    src: deploy.env.j2
+    dest: /etc/sonarqube/deploy.env
+    owner: root
+    group: root
+    mode: "0644"
+
 # --- deploy tooling ----------------------------------------------------------
 - name: Install the deploy script
   ansible.builtin.copy:

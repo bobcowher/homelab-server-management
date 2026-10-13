@@ -755,6 +755,123 @@
           stderr="{{ sonarqube_db_probe.stderr | trim }}"
       tags: [sonarqube]
 
+    - name: Stat the service environment file
+      ansible.builtin.stat:
+        path: /etc/sonarqube/sonarqube.env
+      register: sonarqube_env_stat
+      tags: [sonarqube]
+
+    # Before the slurp, deliberately. The slurp carries the database password
+    # so it must be no_log, and no_log censors its FAILURE message too -- a
+    # missing file reported only as "FAILED" with no reason. This assertion is
+    # not no_log'd, so it is the one that speaks when the file is absent.
+    - name: The service environment file exists
+      ansible.builtin.assert:
+        that:
+          - sonarqube_env_stat.stat.exists
+        fail_msg: >-
+          /etc/sonarqube/sonarqube.env does not exist. The sonarqube role has
+          not been applied, or its template task failed.
+      tags: [sonarqube]
+
+    - name: Read the SonarQube service environment file
+      ansible.builtin.slurp:
+        src: /etc/sonarqube/sonarqube.env
+      become: true
+      register: sonarqube_env
+      no_log: true
+      tags: [sonarqube]
+
+    # Asserts the file agrees with vars.yml. Every key here is a real
+    # ProcessProperties key put through the uppercase/underscore mapping in
+    # SettingFormatter.java:32, so each one is checkable against the fork's
+    # source rather than against folklore.
+    #
+    # SONAR_JDBC_PASSWORD is checked for PRESENCE only. Asserting its value
+    # would require the password in this play's output.
+    - name: The service environment matches this host
+      ansible.builtin.assert:
+        that:
+          - "'SONAR_JDBC_URL=jdbc:postgresql://127.0.0.1:5432/' ~ sonarqube_db_name in sonarqube_env_text"
+          - "'SONAR_JDBC_USERNAME=' ~ sonarqube_db_user in sonarqube_env_text"
+          - "'SONAR_JDBC_PASSWORD=' in sonarqube_env_text"
+          - "'SONAR_PATH_DATA=' ~ sonarqube_data_dir ~ '/data' in sonarqube_env_text"
+          - "'SONAR_PATH_TEMP=' ~ sonarqube_data_dir ~ '/temp' in sonarqube_env_text"
+          - "'SONAR_PATH_LOGS=' ~ sonarqube_log_dir in sonarqube_env_text"
+          - "'SONAR_WEB_PORT=' ~ sonarqube_port in sonarqube_env_text"
+          - "'SONAR_TELEMETRY_ENABLE=false' in sonarqube_env_text"
+        fail_msg: >-
+          /etc/sonarqube/sonarqube.env does not match the variables in
+          vars.yml.
+      vars:
+        sonarqube_env_text: "{{ sonarqube_env.content | b64decode }}"
+      tags: [sonarqube]
+
+    # The file carries the database password, so it must not be world
+    # readable. Group sonarqube so the service can read it; nobody else.
+    - name: The service environment file is not world readable
+      ansible.builtin.assert:
+        that:
+          - sonarqube_env_stat.stat.mode == '0640'
+          - sonarqube_env_stat.stat.pw_name == 'root'
+          - sonarqube_env_stat.stat.gr_name == sonarqube_user
+        fail_msg: >-
+          /etc/sonarqube/sonarqube.env is
+          {{ sonarqube_env_stat.stat.mode }}
+          {{ sonarqube_env_stat.stat.pw_name }}:{{ sonarqube_env_stat.stat.gr_name }},
+          expected 0640 root:{{ sonarqube_user }}. It contains the database
+          password.
+      tags: [sonarqube]
+
+    # become, because the state directories are 0750 owned by the service
+    # account: the connecting user cannot traverse {{ sonarqube_data_dir }} to
+    # stat its children, and the stat returns "Permission denied" rather than
+    # anything about the directories themselves. 0750 is deliberate -- this is
+    # a network-facing service's data -- so the probe adapts, not the mode.
+    - name: Stat the state directories
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      become: true
+      register: sonarqube_dirs
+      loop:
+        - "{{ sonarqube_data_dir }}/data"
+        - "{{ sonarqube_data_dir }}/temp"
+        - "{{ sonarqube_log_dir }}"
+        - "{{ sonarqube_root }}/releases"
+      tags: [sonarqube]
+
+    # Writable by the service account, because these are the only paths the
+    # unit's ReadWritePaths names. If any of them is root-owned the service
+    # starts and then dies on its first write.
+    - name: The state directories exist and belong to the service account
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isdir
+          - item.stat.pw_name == sonarqube_user
+        fail_msg: >-
+          {{ item.item }} is missing or not owned by {{ sonarqube_user }}.
+      loop: "{{ sonarqube_dirs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      tags: [sonarqube]
+
+    - name: Stat the source checkout
+      ansible.builtin.stat:
+        path: "{{ sonarqube_root }}/src/.git"
+      register: sonarqube_src
+      tags: [sonarqube]
+
+    - name: The fork is checked out and owned by robertcowher
+      ansible.builtin.assert:
+        that:
+          - sonarqube_src.stat.exists
+          - sonarqube_src.stat.pw_name == 'robertcowher'
+        fail_msg: >-
+          {{ sonarqube_root }}/src is not a checkout owned by robertcowher.
+          It must be, so that building needs no sudo.
+      tags: [sonarqube]
+
     # --- bobgpt ---------------------------------------------------------------
     #
     # This host is provisioned for a server whose code lives in

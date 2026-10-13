@@ -2,3 +2,29 @@
 - name: Reload sysctl
   ansible.builtin.command: sysctl --system
   changed_when: true
+
+# Guarded on the unit's existence, via two tasks sharing one `listen` so a
+# single `notify: Restart sonarqube` runs both.
+#
+# The guard is not for convenience. The env file is written earlier in this
+# role than the unit is installed, and handlers run at the END of the play, so
+# in a complete run the unit is always there by then. But a partial apply --
+# this role half-built, or a future reordering -- would notify a handler for a
+# unit that does not exist, and systemd's "Unit sonarqube.service not found"
+# would fail the whole play on a host that is otherwise fine.
+#
+# Unlike bobgpt's handler, which checks whether the service is RUNNING because
+# that one must never be started by a playbook, this checks whether it EXISTS.
+# SonarQube is enabled at boot, so starting a stopped one is correct.
+- name: Check whether the sonarqube unit is installed
+  ansible.builtin.stat:
+    path: /etc/systemd/system/sonarqube.service
+  register: sonarqube_unit_file
+  listen: Restart sonarqube
+
+- name: Restart sonarqube if its unit is installed
+  ansible.builtin.systemd_service:
+    name: sonarqube.service
+    state: restarted
+  when: sonarqube_unit_file.stat.exists
+  listen: Restart sonarqube
