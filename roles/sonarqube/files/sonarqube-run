@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Managed by Ansible. See roles/sonarqube/tasks/main.yml.
+#
+# ExecStart for sonarqube.service. This wrapper exists for exactly one reason:
+# the application jar's name carries the version
+# (lib/sonar-application-26.11.jar) and systemd's ExecStart does not expand
+# globs. Putting the glob here keeps the version out of the unit file, which is
+# what lets a deploy change versions without re-templating anything.
+set -euo pipefail
+
+HOME_DIR=${SONARQUBE_HOME:-/opt/sonarqube/current}
+
+shopt -s nullglob
+jars=("$HOME_DIR"/lib/sonar-application-*.jar)
+shopt -u nullglob
+
+if [ ${#jars[@]} -ne 1 ]; then
+  echo "expected exactly one sonar-application jar in $HOME_DIR/lib, found ${#jars[@]}" >&2
+  exit 1
+fi
+
+# exec, so systemd tracks the JVM itself as the main process rather than this
+# shell. Without it, a stop would signal bash and leave the JVM behind.
+exec java -jar "${jars[0]}"

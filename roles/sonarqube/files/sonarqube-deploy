@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# Managed by Ansible. See roles/sonarqube/tasks/main.yml.
+#
+# Build Robert's SonarQube fork from source and swap the running release to it.
+#
+# Run as robertcowher, who owns the checkout (so git and gradle need no
+# privilege) and has passwordless sudo on this host (used only for the unpack,
+# the symlink flip and the restart):
+#
+#     ssh lab sonarqube-deploy
+#
+# The order matters and is the point of the whole script: the build completes
+# BEFORE anything is swapped, so a broken commit cannot take down a running
+# server, and a release that builds but will not start is rolled back
+# automatically.
+#
+# Tested by scripts/test_sonarqube_deploy.sh. Two hooks exist for that harness
+# and for nothing else: SONARQUBE_DEPLOY_ENV points at an alternative env file,
+# and SONARQUBE_SKIP_BUILD=1 skips git and gradle.
+set -euo pipefail
+
+ENV_FILE=${SONARQUBE_DEPLOY_ENV:-/etc/sonarqube/deploy.env}
+if [ -r "$ENV_FILE" ]; then
+  # shellcheck source=/dev/null
+  . "$ENV_FILE"
+fi
+
+SRC=${SONARQUBE_SRC:-/opt/sonarqube/src}
+RELEASES=${SONARQUBE_RELEASES:-/opt/sonarqube/releases}
+CURRENT=${SONARQUBE_CURRENT:-/opt/sonarqube/current}
+USER_NAME=${SONARQUBE_USER:-sonarqube}
+BRANCH=${SONARQUBE_BRANCH:-master}
+KEEP=${SONARQUBE_KEEP_RELEASES:-3}
+TIMEOUT=${SONARQUBE_START_TIMEOUT:-300}
+PORT=${SONARQUBE_PORT:-9000}
+SERVICE=${SONARQUBE_SERVICE:-sonarqube.service}
+SKIP_BUILD=${SONARQUBE_SKIP_BUILD:-0}
+
+DIST="$SRC/sonar-application/build/distributions"
+
+log() { printf '%s  %s\n' "$(date -Is)" "$*"; }
+die() { log "ERROR: $*" >&2; exit 1; }
+
+# --- build -------------------------------------------------------------------
+
+if [ "$SKIP_BUILD" != "1" ]; then
+  log "resetting $SRC to origin/$BRANCH"
+  git -C "$SRC" fetch --prune origin
+  # A reset rather than a pull: this is a deploy checkout, not a work tree, so
+  # it should match the remote exactly and never need a merge.
+  git -C "$SRC" reset --hard "origin/$BRANCH"
+
+  # Clearing first is what makes the single-zip check below meaningful. Without
+  # it, yesterday's artifact sits next to today's and the deploy becomes a
+  # guess.
+  log "clearing $DIST"
+  rm -rf "$DIST"
+
+  log "building :sonar-application:zip (this takes a while)"
+  (cd "$SRC" && ./gradlew --console=plain :sonar-application:zip)
+fi
+
+# --- identify the artifact ---------------------------------------------------
+
+shopt -s nullglob
+zips=("$DIST"/sonarqube-*.zip)
+shopt -u nullglob
+
+if [ ${#zips[@]} -eq 0 ]; then
+  die "no zip in $DIST -- did the build actually produce one?"
+fi
+if [ ${#zips[@]} -gt 1 ]; then
+  # Deliberately NOT "take the newest". Two artifacts means the state of the
+  # build directory is not understood, and deploying one of them would look
+  # like success while serving the wrong code.
+  die "expected one zip in $DIST, found ${#zips[@]}: ${zips[*]}"
+fi
+ZIP=${zips[0]}
+log "artifact $ZIP"
+
+SHA=$(git -C "$SRC" rev-parse --short HEAD)
+
+STAGE=$(mktemp -d "${TMPDIR:-/tmp}/sonarqube-deploy.XXXXXX")
+cleanup() { rm -rf "$STAGE"; }
+trap cleanup EXIT
+
+unzip -q "$ZIP" -d "$STAGE"
+
+shopt -s nullglob
+unpacked=("$STAGE"/sonarqube-*/)
+shopt -u nullglob
+[ ${#unpacked[@]} -eq 1 ] || \
+  die "expected one directory inside $ZIP, found ${#unpacked[@]}"
+
+# The version is read from the artifact itself, never declared anywhere in the
+# Ansible repository.
+VERSION=$(basename "${unpacked[0]}")
+VERSION=${VERSION#sonarqube-}
+RELEASE="$RELEASES/$VERSION-$SHA"
+log "release $VERSION-$SHA"
+
+# --- swap --------------------------------------------------------------------
+
+PREVIOUS=""
+if [ -L "$CURRENT" ]; then
+  PREVIOUS=$(readlink -f "$CURRENT")
+  log "previous release $PREVIOUS"
+fi
+
+point_at() {
+  # Two steps, not one: `ln -sfn` onto an existing symlink that points at a
+  # DIRECTORY creates a link inside it instead of replacing it. Writing a new
+  # name and renaming it over the old one is both correct and atomic, so there
+  # is never an instant where $CURRENT does not exist.
+  sudo ln -sfn "$1" "$CURRENT.new"
+  sudo mv -T "$CURRENT.new" "$CURRENT"
+}
+
+sudo rm -rf "$RELEASE"
+sudo mkdir -p "$RELEASES"
+sudo mv "${unpacked[0]}" "$RELEASE"
+sudo chown -R "$USER_NAME:$USER_NAME" "$RELEASE"
+
+point_at "$RELEASE"
+log "restarting $SERVICE"
+sudo systemctl restart "$SERVICE"
+
+# --- prove it came up --------------------------------------------------------
+
+wait_up() {
+  local deadline status
+  deadline=$(( $(date +%s) + TIMEOUT ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    status=$(curl -fsS "http://127.0.0.1:$PORT/api/system/status" 2>/dev/null \
+      | sed -n 's/.*"status" *: *"\([A-Z]*\)".*/\1/p')
+    if [ "$status" = "UP" ]; then
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+
+if wait_up; then
+  log "UP on $VERSION-$SHA"
+else
+  log "did not reach UP within ${TIMEOUT}s"
+  if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ] && [ "$PREVIOUS" != "$RELEASE" ]; then
+    log "rolling back to $PREVIOUS"
+    point_at "$PREVIOUS"
+    sudo systemctl restart "$SERVICE"
+    if wait_up; then
+      log "rolled back and UP"
+    else
+      log "rollback did NOT come up either -- check journalctl -u $SERVICE"
+    fi
+    die "deploy of $VERSION-$SHA failed; rolled back to $PREVIOUS"
+  fi
+  # Nothing to roll back to. Remove the symlink rather than leave it pointing
+  # at a release that cannot run: a dangling current would become the next
+  # deploy's rollback target, which would quietly make the next failure
+  # unrecoverable too.
+  log "no previous release to roll back to; removing $CURRENT"
+  sudo rm -f "$CURRENT"
+  die "deploy of $VERSION-$SHA failed and there was nothing to roll back to"
+fi
+
+# --- prune -------------------------------------------------------------------
+
+LIVE=$(readlink -f "$CURRENT")
+# Newest first, then skip the ones we keep. The live release is spared
+# unconditionally below, because it is not necessarily the newest: redeploying
+# an older sha puts the running release behind newer directories.
+mapfile -t stale < <(ls -1dt "$RELEASES"/*/ 2>/dev/null | tail -n "+$((KEEP + 1))")
+for dir in "${stale[@]:-}"; do
+  [ -n "$dir" ] || continue
+  if [ "$(readlink -f "$dir")" = "$LIVE" ]; then
+    log "keeping $dir (live)"
+    continue
+  fi
+  log "pruning $dir"
+  sudo rm -rf "$dir"
+done
+
+log "done"

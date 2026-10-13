@@ -33,3 +33,20 @@
     group: root
     mode: "0644"
   notify: Reload sysctl
+
+# --- deploy tooling ----------------------------------------------------------
+- name: Install the deploy script
+  ansible.builtin.copy:
+    src: sonarqube-deploy
+    dest: /usr/local/bin/sonarqube-deploy
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the run wrapper
+  ansible.builtin.copy:
+    src: sonarqube-run
+    dest: /usr/local/bin/sonarqube-run
+    owner: root
+    group: root
+    mode: "0755"
