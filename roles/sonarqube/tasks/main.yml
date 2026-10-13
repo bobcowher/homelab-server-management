@@ -34,6 +34,83 @@
     mode: "0644"
   notify: Reload sysctl
 
+# --- database ----------------------------------------------------------------
+#
+# SonarQube Community Build has no embedded database; PostgreSQL is mandatory.
+# The fork's own shipped conf/sonar.properties:41 says "PostgreSQL 14 or
+# greater" with no upper bound, and build.gradle:638 pins JDBC driver
+# 42.7.13, which speaks the PG 18 protocol. Ubuntu 26.04 offers 18 only.
+#
+# Native rather than containerised: SonarQube is the only consumer, it keeps
+# docker off the boot path for the service, and it keeps the password out of a
+# compose file in a public repository.
+- name: Install PostgreSQL
+  ansible.builtin.apt:
+    name:
+      - postgresql
+      # The community.postgresql modules talk to the server through this, on
+      # the TARGET host. Without it every task below fails with
+      # "the python psycopg2 module is required".
+      - python3-psycopg2
+    state: present
+
+- name: Enable and start PostgreSQL
+  ansible.builtin.systemd_service:
+    name: postgresql
+    enabled: true
+    state: started
+
+- name: Create the SonarQube config directory
+  ansible.builtin.file:
+    path: /etc/sonarqube
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Generated on the host and never rendered into the repository, which is
+# public. Same shape as the SearXNG secret in roles/webstack: umask before the
+# redirect so the file is never briefly world-readable, and `creates:` so a
+# second apply does not roll the password and lock the service out of its own
+# database.
+- name: Generate the database password if it does not exist
+  ansible.builtin.shell:
+    cmd: umask 077 && openssl rand -hex 32 > /etc/sonarqube/db_password
+    creates: /etc/sonarqube/db_password
+
+- name: Read the database password
+  ansible.builtin.slurp:
+    src: /etc/sonarqube/db_password
+  register: sonarqube_db_password_raw
+  no_log: true
+
+- name: Record the database password
+  ansible.builtin.set_fact:
+    sonarqube_db_password: "{{ sonarqube_db_password_raw.content | b64decode | trim }}"
+  no_log: true
+
+- name: Create the SonarQube database role
+  community.postgresql.postgresql_user:
+    name: "{{ sonarqube_db_user }}"
+    password: "{{ sonarqube_db_password }}"
+    role_attr_flags: NOSUPERUSER,NOCREATEDB,NOCREATEROLE
+  become: true
+  become_user: postgres
+  no_log: true
+
+# SonarQube requires UTF8 and a deterministic collation. It checks the
+# encoding at startup and refuses a non-UTF8 database.
+- name: Create the SonarQube database
+  community.postgresql.postgresql_db:
+    name: "{{ sonarqube_db_name }}"
+    owner: "{{ sonarqube_db_user }}"
+    encoding: UTF8
+    template: template0
+    lc_collate: C.UTF-8
+    lc_ctype: C.UTF-8
+  become: true
+  become_user: postgres
+
 # --- deploy tooling ----------------------------------------------------------
 - name: Install the deploy script
   ansible.builtin.copy:

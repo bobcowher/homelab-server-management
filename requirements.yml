@@ -4,3 +4,8 @@ collections:
     version: ">=8.3.0"
   - name: ansible.posix
     version: ">=1.5.4"
+  # SonarQube has no embedded database. This is already present on Robert's
+  # desktop but was never declared, which would have broken the recovery path
+  # on any other machine.
+  - name: community.postgresql
+    version: ">=3.3.0"

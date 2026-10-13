@@ -694,6 +694,67 @@
           bundled Elasticsearch requires. It will refuse to start.
       tags: [sonarqube]
 
+    - name: Read the PostgreSQL unit state
+      ansible.builtin.command: systemctl is-enabled postgresql.service
+      register: sonarqube_pg_enabled
+      changed_when: false
+      failed_when: false
+      tags: [sonarqube]
+
+    - name: Read whether PostgreSQL is running
+      ansible.builtin.command: systemctl is-active postgresql.service
+      register: sonarqube_pg_active
+      changed_when: false
+      failed_when: false
+      tags: [sonarqube]
+
+    - name: PostgreSQL starts at boot and is running
+      ansible.builtin.assert:
+        that:
+          - sonarqube_pg_enabled.stdout == 'enabled'
+          - sonarqube_pg_active.stdout == 'active'
+        fail_msg: >-
+          postgresql.service is enabled="{{ sonarqube_pg_enabled.stdout }}"
+          active="{{ sonarqube_pg_active.stdout }}". SonarQube has no embedded
+          database and will not start without it.
+      tags: [sonarqube]
+
+    # Connects as the sonarqube role over TCP with the generated password,
+    # exactly as the service does. A `psql -U postgres` check would pass on
+    # peer authentication and prove nothing about the path SonarQube uses.
+    #
+    # PGPASSWORD is read from the file rather than echoed, and the command
+    # prints only the literal CONNECT_OK, so the password cannot reach the
+    # Ansible log even with -vvv.
+    - name: Probe the SonarQube database as the service role
+      ansible.builtin.shell:
+        cmd: >-
+          PGPASSWORD="$(cat /etc/sonarqube/db_password)"
+          psql -h 127.0.0.1 -U {{ sonarqube_db_user }}
+          -d {{ sonarqube_db_name }} -tAc "select 'CONNECT_OK'"
+      register: sonarqube_db_probe
+      changed_when: false
+      failed_when: false
+      become: true
+      tags: [sonarqube]
+
+    # failed_when: false above, then assert on the OUTPUT. If the probe is
+    # allowed to fail the task, a command that errors for an unrelated reason
+    # (missing psql, unreadable password file) would stop the play with a
+    # message about psql rather than about the database -- and an assertion
+    # written the other way round, trusting a non-zero exit, once passed here
+    # because the probe itself errored.
+    - name: The SonarQube role can reach its own database over TCP
+      ansible.builtin.assert:
+        that:
+          - "'CONNECT_OK' in sonarqube_db_probe.stdout"
+        fail_msg: >-
+          Could not connect to {{ sonarqube_db_name }} as
+          {{ sonarqube_db_user }} on 127.0.0.1:5432.
+          rc={{ sonarqube_db_probe.rc }},
+          stderr="{{ sonarqube_db_probe.stderr | trim }}"
+      tags: [sonarqube]
+
     # --- bobgpt ---------------------------------------------------------------
     #
     # This host is provisioned for a server whose code lives in
