@@ -19,6 +19,7 @@
     - { role: webstack, tags: [webstack] }
     - { role: beekeeper, tags: [beekeeper] }
     - { role: bobgpt, tags: [bobgpt] }
+    - { role: sonarqube, tags: [sonarqube] }
     # Last: the idle check reads llama-swap's journal, beekeeper's API, and
     # bobgpt's journal and cgroup, so all three should be in their final state
     # before it is installed and dry-run.

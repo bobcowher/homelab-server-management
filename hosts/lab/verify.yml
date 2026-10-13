@@ -641,6 +641,59 @@
         label: "GPU {{ item.item.index }} @ {{ item.item.offset_mhz }}MHz"
       tags: [nvidia]
 
+    # --- sonarqube ------------------------------------------------------------
+    #
+    # Robert's SonarQube fork, built from source on this host. These assertions
+    # cover the host contract: the toolchain, the limits Elasticsearch checks
+    # at startup, and -- further down -- that the version actually serving
+    # matches the release the symlink points at.
+    - name: The SonarQube build and run toolchain is installed
+      ansible.builtin.command: dpkg-query -W -f='${Status}' {{ item }}
+      register: sonarqube_pkg
+      changed_when: false
+      failed_when: "'ok installed' not in sonarqube_pkg.stdout"
+      loop:
+        - openjdk-21-jdk
+        - unzip
+      tags: [sonarqube]
+
+    - name: Read the Java version
+      ansible.builtin.command: java -version
+      register: sonarqube_java
+      changed_when: false
+      tags: [sonarqube]
+
+    # The fork's gradle.properties names jdk-21.0.12.1+1, and the build fails
+    # on anything older than 21. Assert the major version rather than the full
+    # string so a security patch does not break verification.
+    - name: Java is version 21
+      ansible.builtin.assert:
+        that:
+          - "'version \"21.' in (sonarqube_java.stderr + sonarqube_java.stdout)"
+        fail_msg: >-
+          Expected Java 21 for the SonarQube build, got:
+          {{ (sonarqube_java.stderr + sonarqube_java.stdout) | trim }}
+      tags: [sonarqube]
+
+    - name: Read vm.max_map_count
+      ansible.builtin.command: sysctl -n vm.max_map_count
+      register: sonarqube_mmap
+      changed_when: false
+      tags: [sonarqube]
+
+    # Bundled Elasticsearch runs a bootstrap check against this and refuses to
+    # start below 524288. Lab reports far more than that by default, but this
+    # asserts the sysctl drop-in rather than trusting a default that could
+    # change under a kernel or sysctl-package update.
+    - name: vm.max_map_count is above the Elasticsearch floor
+      ansible.builtin.assert:
+        that:
+          - sonarqube_mmap.stdout | int >= 524288
+        fail_msg: >-
+          vm.max_map_count is {{ sonarqube_mmap.stdout }}, below the 524288
+          bundled Elasticsearch requires. It will refuse to start.
+      tags: [sonarqube]
+
     # --- bobgpt ---------------------------------------------------------------
     #
     # This host is provisioned for a server whose code lives in

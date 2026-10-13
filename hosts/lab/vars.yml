@@ -456,3 +456,48 @@ power_override_flag: /run/lab-no-suspend
 power_sysstat_dir: /var/log/sysstat
 power_beekeeper_url: "http://127.0.0.1:5000/api/v1/busy"
 power_llama_swap_unit: llama-swap
+
+# --- sonarqube ---------------------------------------------------------------
+#
+# Robert's fork of SonarQube Community Build, built from source ON this host
+# and served from a release symlink. The fork is github.com/bobcowher/sonarqube
+# and adds one feature commit: long-lived branch analysis, bundled as a plugin
+# rather than installed as one.
+#
+# Deliberately NO version anywhere below. The running version comes from the
+# zip the build produces and is read back by verify.yml from
+# /api/server/version. See
+# docs/superpowers/specs/2026-10-12-sonarqube-deployment-design.md.
+sonarqube_user: sonarqube
+sonarqube_root: /opt/sonarqube
+sonarqube_repo: https://github.com/bobcowher/sonarqube.git
+
+# Bootstrap-and-deploy policy, not a pin: Ansible clones this once and
+# sonarqube-deploy resets to it. Changing it here changes what the next deploy
+# builds.
+sonarqube_branch: master
+
+# Binds all interfaces because the scanner and the browser both come from the
+# LAN. ufw is what keeps it private -- allowed from lan_subnet only. Unlike
+# bobgpt and llama-swap there is NO docker_bridge_subnet rule: nothing in a
+# container talks to SonarQube, so that rule would be surface for no gain.
+sonarqube_port: 9000
+
+# All mutable state lives outside the release tree, so flipping the symlink
+# touches none of it. sonar.path.data/.temp/.logs are relocatable
+# (ProcessProperties.java:69-73) and absolute paths are honoured.
+sonarqube_data_dir: "{{ data_root }}/sonarqube"
+sonarqube_log_dir: /var/log/sonarqube
+
+sonarqube_db_name: sonarqube
+sonarqube_db_user: sonarqube
+
+# How many unpacked releases to keep. Rollback needs at least two; three gives
+# one spare. Each is roughly 1GB unpacked.
+sonarqube_keep_releases: 3
+
+# Seconds to wait for /api/system/status to report UP after a restart before
+# treating the deploy as failed and rolling back. Elasticsearch plus two JVMs
+# takes 60-90s cold on this box, so this is generous on purpose: a rollback
+# triggered by impatience would be worse than a slow deploy.
+sonarqube_start_timeout: 300

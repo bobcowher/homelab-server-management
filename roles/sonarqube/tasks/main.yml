@@ -1,0 +1,35 @@
+---
+# Provisions lab to BUILD and SERVE Robert's SonarQube fork from source.
+#
+# The fork is github.com/bobcowher/sonarqube: SonarQube Community Build plus
+# one commit adding long-lived branch analysis. This role installs the
+# toolchain, the database, a service account, two environment files, a unit and
+# a deploy script -- and never names a SonarQube version. The version comes
+# from whatever the build produces.
+#
+# See docs/superpowers/specs/2026-10-12-sonarqube-deployment-design.md.
+
+# openjdk-21-jdk, not -jre: the Gradle build needs a compiler, and this host
+# is the build machine as well as the server. Ubuntu 26.04 carries
+# 21.0.12.1+1, which is the jre_release_name the fork's gradle.properties
+# names -- the build and the runtime agree by accident of good timing, not by
+# anything this role enforces.
+#
+# unzip is needed by sonarqube-deploy to unpack the distribution. It is also
+# in tools_apt, but this role must stand on its own: a host provisioned with
+# --tags sonarqube alone has to work.
+- name: Install the SonarQube build and run toolchain
+  ansible.builtin.apt:
+    name:
+      - openjdk-21-jdk
+      - unzip
+    state: present
+
+- name: Install the sysctl drop-in for Elasticsearch
+  ansible.builtin.copy:
+    src: 99-sonarqube.conf
+    dest: /etc/sysctl.d/99-sonarqube.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload sysctl
