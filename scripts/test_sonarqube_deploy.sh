@@ -87,8 +87,12 @@ EOF
   echo "$root"
 }
 
-# Writes a zip that unpacks to a single sonarqube-<version>/ directory, the
-# shape :sonar-application:zip produces.
+# Writes a zip shaped exactly like the one :sonar-application:zip produces,
+# which is NOT the obvious shape: the ARCHIVE is sonar-application-<version>.zip
+# while the single directory INSIDE it is sonarqube-<version>/. The first real
+# build on lab (2026-10-13) failed on precisely this -- the script globbed for
+# sonarqube-*.zip, found nothing, and refused to deploy. Observed artifact:
+# sonar-application-26.11-SNAPSHOT.zip containing sonarqube-26.11-SNAPSHOT/.
 make_zip() {
   local root=$1 version=$2
   local stage
@@ -96,7 +100,7 @@ make_zip() {
   mkdir -p "$stage/sonarqube-$version/lib"
   : > "$stage/sonarqube-$version/lib/sonar-application-$version.jar"
   (cd "$stage" && zip -qr \
-    "$root/src/sonar-application/build/distributions/sonarqube-$version.zip" \
+    "$root/src/sonar-application/build/distributions/sonar-application-$version.zip" \
     "sonarqube-$version")
   rm -rf "$stage"
 }
@@ -165,6 +169,15 @@ test_happy_path() {
     "$(readlink -f "$root/current")"
   check "happy: restarted the service" "yes" \
     "$(grep -q "restart sonarqube.service" "$root/systemctl.log" && echo yes || echo no)"
+  # Not cosmetic. PluginDownloader.start() calls forceMkdir on
+  # <home>/extensions/downloads and throws IllegalStateException if it cannot
+  # create it, and under ProtectSystem=strict the release tree is read-only at
+  # runtime -- so the web server died on startup until the deploy created this
+  # directory while the tree was still writable (lab, 2026-10-13). forceMkdir
+  # is a no-op when the directory already exists, which is what makes
+  # pre-creating it sufficient.
+  check "happy: extensions/downloads pre-created" "yes" \
+    "$([ -d "$root/releases/26.11-deadbee/extensions/downloads" ] && echo yes || echo no)"
   rm -rf "$root"
 }
 

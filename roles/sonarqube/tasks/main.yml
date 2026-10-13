@@ -206,3 +206,44 @@
     owner: root
     group: root
     mode: "0755"
+
+# --- service -----------------------------------------------------------------
+- name: Install the service unit
+  ansible.builtin.template:
+    src: sonarqube.service.j2
+    dest: /etc/systemd/system/sonarqube.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart sonarqube
+
+- name: Check whether a release is already deployed
+  ansible.builtin.stat:
+    path: "{{ sonarqube_root }}/current"
+  register: sonarqube_current_link
+
+# This is what makes the recovery claim literal: on a bare host, ONE playbook
+# run installs the toolchain, the database and the checkout and then builds and
+# starts the fork. Guarded on the symlink's absence, so a normal apply never
+# triggers a 20-minute Gradle build -- deploys are sonarqube-deploy's job from
+# then on.
+#
+# Run as robertcowher: they own the checkout, so git and gradle need no
+# privilege, and the script sudoes for the three steps that do.
+- name: Build and deploy the fork if nothing is deployed yet
+  ansible.builtin.command: /usr/local/bin/sonarqube-deploy
+  become: true
+  become_user: robertcowher
+  when: not sonarqube_current_link.stat.exists
+  changed_when: true
+  # A source build of SonarQube from a cold Gradle cache. Generous on purpose:
+  # a timeout here leaves a half-deployed host, which is worse than waiting.
+  async: 5400
+  poll: 30
+
+- name: Enable and start SonarQube
+  ansible.builtin.systemd_service:
+    name: sonarqube.service
+    enabled: true
+    state: started
+    daemon_reload: true

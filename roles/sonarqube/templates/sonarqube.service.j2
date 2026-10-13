@@ -1,0 +1,82 @@
+# Managed by Ansible. See roles/sonarqube/tasks/main.yml.
+[Unit]
+Description=SonarQube (Robert's fork, built from source)
+Documentation=https://github.com/bobcowher/sonarqube
+# SonarQube Community Build has no embedded database and exits on startup if it
+# cannot reach PostgreSQL, so this is a real ordering requirement rather than a
+# nicety.
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User={{ sonarqube_user }}
+Group={{ sonarqube_user }}
+# Home is the release directory: AppSettingsLoaderImpl detects it from the
+# jar's own location and forces sonar.path.home to it, so this only needs to be
+# somewhere the process can sit.
+WorkingDirectory={{ sonarqube_root }}/current
+EnvironmentFile=/etc/sonarqube/sonarqube.env
+# The wrapper globs for the jar under this directory. Passed explicitly rather
+# than left to the wrapper's built-in default, so that changing sonarqube_root
+# in vars.yml cannot leave the unit and the wrapper disagreeing about where the
+# release lives.
+Environment=SONARQUBE_HOME={{ sonarqube_root }}/current
+
+# A wrapper, because the jar name carries the version and ExecStart cannot
+# glob. Keeping the glob out of here is what lets a deploy change versions
+# without re-templating the unit.
+ExecStart=/usr/local/bin/sonarqube-run
+
+# Unlike bobgpt, this service is enabled and expected to be up, so a crash
+# should be recovered rather than left visible. 30s because a restart means
+# three JVMs and an Elasticsearch start; a tighter interval would just thrash.
+Restart=on-failure
+RestartSec=30
+
+# Elasticsearch runs bootstrap checks against both of these at startup and
+# refuses to start if they are too low. The third such check is
+# vm.max_map_count, set by /etc/sysctl.d/99-sonarqube.conf.
+LimitNOFILE=131072
+LimitNPROC=8192
+
+# Cold start is Elasticsearch plus two JVMs plus any pending database
+# migration, so systemd must not give up before SonarQube has had a chance.
+TimeoutStartSec=300
+# Shutting down means flushing Elasticsearch. Killing it early is what leaves a
+# dirty index to rebuild on the next boot, and this box powers off nightly.
+TimeoutStopSec=180
+
+# The whole filesystem is read-only except what is named below. A
+# network-facing web server on a box whose other tenant is training
+# checkpoints should not be able to write outside its own tree.
+ProtectSystem=strict
+ProtectHome=true
+# PrivateTmp, forced by Elasticsearch on 2026-10-13. The bundled ES launcher
+# (ServerProcessUtils.setupTempDir) creates its own directory under
+# java.io.tmpdir -- /tmp/elasticsearch-<random> -- entirely independently of
+# sonar.path.temp, and ProtectSystem=strict made that read-only, so ES exited
+# 70 and SonarQube stopped one second after starting:
+#
+#   java.nio.file.FileSystemException: /tmp/elasticsearch-...: Read-only file
+#   system
+#
+# A private /tmp rather than ReadWritePaths=/tmp because it is the tighter of
+# the two: ES gets somewhere writable without this service gaining any access
+# to the /tmp that every other process on this box shares, and systemd discards
+# it on stop.
+#
+# The alternative was ES_TMPDIR, which that same launcher honours ahead of
+# java.io.tmpdir and which SonarQube would pass through (ProcessLauncherImpl
+# copies the parent environment and suppresses only JAVA_TOOL_OPTIONS). Not
+# taken: it needs a directory that exists and survives startup, and the obvious
+# home for it -- under sonar.path.temp -- is wiped by AppFileSystem on every
+# boot before ES is launched. That is two moving parts and a deletion race
+# where this is one line that depends on nothing inside ES or SonarQube.
+PrivateTmp=true
+ReadWritePaths={{ sonarqube_data_dir }} {{ sonarqube_log_dir }}
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -62,8 +62,13 @@ fi
 
 # --- identify the artifact ---------------------------------------------------
 
+# sonar-application-*.zip, NOT sonarqube-*.zip. The archive is named after the
+# Gradle project that builds it, while the single directory INSIDE it is named
+# sonarqube-<version>/ -- which is what the unpack below globs for. The two
+# names differ, and assuming they matched is what made the first build on lab
+# (2026-10-13) refuse to deploy a zip that had built perfectly.
 shopt -s nullglob
-zips=("$DIST"/sonarqube-*.zip)
+zips=("$DIST"/sonar-application-*.zip)
 shopt -u nullglob
 
 if [ ${#zips[@]} -eq 0 ]; then
@@ -91,6 +96,19 @@ unpacked=("$STAGE"/sonarqube-*/)
 shopt -u nullglob
 [ ${#unpacked[@]} -eq 1 ] || \
   die "expected one directory inside $ZIP, found ${#unpacked[@]}"
+
+# Created here, while the tree is still writable, because the web server
+# refuses to start without it: PluginDownloader.start() calls forceMkdir on
+# <home>/extensions/downloads and throws if that fails, and at runtime the
+# release tree is read-only (ProtectSystem=strict). forceMkdir is a no-op on an
+# existing directory, so creating it now is the whole fix.
+#
+# It stays empty. There is no sonar.path.extensions, so a plugin installed
+# through the web UI would land inside the release directory and be destroyed
+# by the next deploy -- which is why plugins belong in the fork, bundled into
+# lib/extensions. The read-only tree makes that rule enforced rather than
+# merely documented: a Marketplace install fails instead of appearing to work.
+mkdir -p "${unpacked[0]}/extensions/downloads"
 
 # The version is read from the artifact itself, never declared anywhere in the
 # Ansible repository.

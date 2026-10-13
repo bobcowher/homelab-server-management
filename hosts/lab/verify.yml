@@ -872,6 +872,139 @@
           It must be, so that building needs no sudo.
       tags: [sonarqube]
 
+    - name: Read the SonarQube unit state
+      ansible.builtin.command: systemctl is-enabled sonarqube.service
+      register: sonarqube_enabled_state
+      changed_when: false
+      failed_when: false
+      tags: [sonarqube]
+
+    - name: Read whether SonarQube is running
+      ansible.builtin.command: systemctl is-active sonarqube.service
+      register: sonarqube_active_state
+      changed_when: false
+      failed_when: false
+      tags: [sonarqube]
+
+    # Unlike bobgpt, this one IS enabled: Robert's decision, so it is simply
+    # there each morning rather than costing 60-90s of Elasticsearch startup
+    # whenever he wants to scan.
+    - name: SonarQube starts at boot and is running
+      ansible.builtin.assert:
+        that:
+          - sonarqube_enabled_state.stdout == 'enabled'
+          - sonarqube_active_state.stdout == 'active'
+        fail_msg: >-
+          sonarqube.service is enabled="{{ sonarqube_enabled_state.stdout }}"
+          active="{{ sonarqube_active_state.stdout }}", expected
+          enabled/active.
+      tags: [sonarqube]
+
+    - name: Read the Elasticsearch bootstrap limits from the unit
+      ansible.builtin.command: >-
+        systemctl show sonarqube.service -p LimitNOFILE -p LimitNPROC
+      register: sonarqube_limits
+      changed_when: false
+      tags: [sonarqube]
+
+    # Bundled Elasticsearch bootstrap-checks both of these and refuses to start
+    # if they are too low. They are easy to drop in a unit rewrite and the
+    # failure appears as an opaque ES startup error, so assert them directly.
+    - name: The unit raises the limits Elasticsearch checks
+      ansible.builtin.assert:
+        that:
+          - "'LimitNOFILE=131072' in sonarqube_limits.stdout"
+          - "'LimitNPROC=8192' in sonarqube_limits.stdout"
+        fail_msg: >-
+          sonarqube.service limits are wrong:
+          {{ sonarqube_limits.stdout | trim }}
+      tags: [sonarqube]
+
+    - name: Ask SonarQube for its status
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ sonarqube_port }}/api/system/status"
+        return_content: true
+      register: sonarqube_status
+      failed_when: false
+      tags: [sonarqube]
+
+    # Liveness, not "a process exists". Three JVMs can be up with the web
+    # server refusing every request, and systemctl is-active would still say
+    # active.
+    - name: SonarQube reports itself UP
+      ansible.builtin.assert:
+        that:
+          - sonarqube_status.status == 200
+          - sonarqube_status.json.status == 'UP'
+        fail_msg: >-
+          /api/system/status did not report UP:
+          status={{ sonarqube_status.status | default('none') }}
+          body={{ sonarqube_status.content | default('') | trim }}
+      tags: [sonarqube]
+
+    - name: Resolve the current release symlink
+      ansible.builtin.stat:
+        path: "{{ sonarqube_root }}/current"
+      register: sonarqube_current
+      tags: [sonarqube]
+
+    - name: Ask SonarQube for its version
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ sonarqube_port }}/api/server/version"
+        return_content: true
+      register: sonarqube_version
+      failed_when: false
+      tags: [sonarqube]
+
+    # The assertion that earns its keep. The release directory is
+    # <version>-<shortsha>, so the version the running JVM reports must be the
+    # prefix of the directory current points at. This is the only check that
+    # catches a flipped symlink with a stale process still serving -- a state
+    # in which every other assertion here passes and the box is quietly
+    # running code nobody thinks is deployed.
+    - name: The serving version matches the release the symlink points at
+      ansible.builtin.assert:
+        that:
+          - sonarqube_current.stat.exists
+          - sonarqube_current.stat.islnk
+          - sonarqube_version.status == 200
+          - >-
+            (sonarqube_current.stat.lnk_target | basename)
+            is match('^' ~ (sonarqube_version.content | trim | regex_escape) ~ '-')
+        fail_msg: >-
+          /api/server/version reports
+          "{{ sonarqube_version.content | default('') | trim }}" but
+          {{ sonarqube_root }}/current points at
+          "{{ sonarqube_current.stat.lnk_target | default('nothing') }}".
+          The symlink was flipped without the service picking it up, or the
+          release was renamed.
+      tags: [sonarqube]
+
+    - name: Find the community branch plugin in the live release
+      ansible.builtin.find:
+        paths: "{{ sonarqube_root }}/current/lib/extensions"
+        patterns: "sonar-community-branch-plugin-*.jar"
+        follow: true
+      register: sonarqube_branch_plugin
+      tags: [sonarqube]
+
+    # The reason the fork exists. It is declared in
+    # sonar-application/bundled_plugins.gradle and the build copies every
+    # bundledPlugin into lib/extensions/ (sonar-application/build.gradle:445),
+    # which is why that is the path searched here. If the jar is missing the
+    # build did not include it, and branch analysis would fail at scan time
+    # with a confusing error rather than here.
+    - name: The community branch plugin is bundled in the live release
+      ansible.builtin.assert:
+        that:
+          - sonarqube_branch_plugin.matched == 1
+        fail_msg: >-
+          Expected exactly one sonar-community-branch-plugin jar in
+          {{ sonarqube_root }}/current/lib/extensions, found
+          {{ sonarqube_branch_plugin.matched }}. The fork's branch analysis
+          will not work.
+      tags: [sonarqube]
+
     # --- bobgpt ---------------------------------------------------------------
     #
     # This host is provisioned for a server whose code lives in
