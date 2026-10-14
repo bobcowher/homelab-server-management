@@ -2,6 +2,37 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+## Status: executed 2026-10-12/13
+
+All eight tasks are implemented and applied to lab. The per-step checkboxes
+below were never ticked; the durable record is git log plus
+`.superpowers/sdd/2026-10-12-sonarqube-deployment/progress.md` (git-ignored).
+
+Commits: `3d5507d` spec, `aecc8fd` plan, `8a4ee48` Task 1, `be703c3` Task 4,
+`a50d68b` Task 2, `421986f` Task 3, `34f597a` Task 5, `b94b153` Task 6,
+`6bc0abf` Task 7, `2a7beb1` Task 8.
+
+**"Done when" is met except for one item**, and that item is a defect in the
+fork rather than in this deployment: `scripts/smoke_sonarqube.sh` fails because
+the compute engine refuses non-main branches
+(`AnalysisMetadataHolderImpl.setBranch:129`, gated on COMMUNITY edition, a
+class the fork's feature commit never touches). The failing test is the
+regression check. See the runbook's SonarQube section. Robert's call,
+2026-10-13: report it, he fixes the fork.
+
+Three predictions in Task 5 are worth reading against what happened: the Node
+toolchain problem and the PostgreSQL 18 dialect problem did not occur, the
+`ProtectSystem=strict` problem did, and a fourth that was not predicted --
+`extensions/downloads` inside the read-only release tree -- also did.
+
+Task 8's measurement method had to change. Reading `sar`, as written below,
+measures the machine; an unrelated training job pinning one core accounted for
+essentially the whole reading and nearly produced a spurious exclusion
+variable. The unit's own cgroup accounting is the right instrument for "what
+does this service cost".
+
+---
+
 **Goal:** Build Robert's SonarQube fork from source on lab and serve it from a
 release symlink, with this repository as the sole recovery path.
 
