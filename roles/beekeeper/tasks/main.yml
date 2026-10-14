@@ -16,8 +16,22 @@
     repo: https://github.com/bobcowher/beekeeper.git
     dest: "{{ beekeeper_home }}"
     version: "{{ beekeeper_branch }}"
-    # Public repo, so no deploy key. deploy.sh only ever fetches.
-    update: true
+    # Public repo, so no deploy key.
+    #
+    # update: false is load-bearing. deploy.sh owns this checkout after the
+    # initial clone and takes a branch argument, so lab is routinely on a
+    # branch other than beekeeper_branch. With update: true, a full-play apply
+    # reset the checkout from feature/model-factory to develop, reran setup.sh
+    # and restarted the service -- which killed a training run 1h23m in and
+    # left beekeeper crash-looping for half an hour, because develop's
+    # schema.sql indexes metric_analyses.run_id while the deployed branch's
+    # migration had renamed it to run_pk (2026-10-13).
+    #
+    # So Ansible clones a bare host and never touches the checkout again. This
+    # also breaks the whole restart chain for a converged host: the setup.sh
+    # task below is gated on this task reporting changed, and the only other
+    # path to a restart is a deliberate edit to the MuJoCo drop-in.
+    update: false
   become: true
   become_user: beekeeper
   register: bk_checkout

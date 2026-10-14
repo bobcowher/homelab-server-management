@@ -222,8 +222,11 @@ llama_models:
 llama_swap_version: "253"
 llama_swap_sha256: 91f4d0af56cd5471d0133d6f89db7a7db118a9cd6f8ecd2bbdffd50aa29e5eb6
 
-# deploy.sh resets the checkout to origin/develop, so Ansible clones the same
-# branch to avoid the two fighting. Change here if that ever moves to main.
+# The branch Ansible clones on a BARE host, and nothing more: the git task is
+# update: false, so deploy.sh owns the checkout from then on and lab is often
+# on some other branch. This value is not a description of what lab is running
+# -- ask git for that. The previous comment here claimed deploy.sh resets to
+# origin/develop; it does not, it takes a branch argument.
 beekeeper_branch: develop
 beekeeper_home: /home/beekeeper/beekeeper
 
