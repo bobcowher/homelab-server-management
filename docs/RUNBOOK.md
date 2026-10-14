@@ -24,14 +24,15 @@ for convenience; if the two ever disagree, this one is right.
 4. [Adding a model](#adding-a-model)
 5. [Web search](#web-search)
 6. [bobgpt](#bobgpt)
-7. [Routine changes](#routine-changes)
-8. [Overnight power saving](#overnight-power-saving)
-9. [GPU power and heat](#gpu-power-and-heat)
-10. [Upgrades and holds](#upgrades-and-holds)
-11. [When it breaks](#when-it-breaks)
-12. [Sensors and memory faults](#sensors-and-memory-faults)
-13. [Handle with care](#handle-with-care)
-14. [Known gaps](#known-gaps)
+7. [SonarQube](#sonarqube)
+8. [Routine changes](#routine-changes)
+9. [Overnight power saving](#overnight-power-saving)
+10. [GPU power and heat](#gpu-power-and-heat)
+11. [Upgrades and holds](#upgrades-and-holds)
+12. [When it breaks](#when-it-breaks)
+13. [Sensors and memory faults](#sensors-and-memory-faults)
+14. [Handle with care](#handle-with-care)
+15. [Known gaps](#known-gaps)
 
 ---
 
@@ -508,6 +509,145 @@ takes most of its 12GB. A 124M model is around 0.7GB so it should still fit,
 but if both are loaded and something OOMs, move `bobgpt_device` to `cuda:1` or
 stop one of them. This is a variable because it is a judgement call per
 session, not a constant.
+
+---
+
+## SonarQube
+
+Robert's fork of SonarQube Community Build
+(`github.com/bobcowher/sonarqube`), built from source on this host. It adds
+long-lived branch analysis, bundled as a plugin rather than installed as one.
+Design: `docs/superpowers/specs/2026-10-12-sonarqube-deployment-design.md`.
+
+- **URL:** `http://lab.local:9000`, or `http://lab.local/sonar` which redirects
+  there. Same URL for the browser and for `sonar.host.url`.
+- **Deploy or update:** `ssh lab sonarqube-deploy`. It resets
+  `/opt/sonarqube/src` to `origin/master`, builds the zip, unpacks it to
+  `/opt/sonarqube/releases/<version>-<sha>`, flips `/opt/sonarqube/current`,
+  restarts, and **rolls the symlink back if the new release does not reach
+  `UP`**. The first build on 2026-10-13 took 6m34s on a cold Gradle cache,
+  well under the 20-45 minutes budgeted.
+- **Which release is live:** `readlink /opt/sonarqube/current`, cross-checked
+  against `curl -s localhost:9000/api/server/version`. `verify.yml` asserts
+  these agree, because a flipped symlink with a stale process serving looks
+  healthy in every other way.
+- **Roll back by hand:** point `current` at an older release directory and
+  restart. `sonarqube-deploy` keeps three.
+- **Logs:** `/var/log/sonarqube/{sonar,web,ce,es}.log`. The journal
+  (`journalctl -u sonarqube`) carries only the launcher's output; the useful
+  detail is in those four files. Both startup failures on 2026-10-13 were
+  diagnosable only from `web.log` and the journal's Elasticsearch stack trace,
+  not from `systemctl status`.
+- **Configuration:** `/etc/sonarqube/sonarqube.env`, read by the unit as an
+  `EnvironmentFile`. `SONAR_JDBC_URL` style keys map from `sonar.jdbc.url` by
+  uppercasing and replacing `.` and `-` with `_`. Nothing is configured inside
+  a release directory, which is what makes the symlink swap atomic.
+
+### 🔴 Branch analysis does not work yet
+
+This is the reason the fork exists, and as of commit `22b9e9e965a` it is only
+half wired. A branch scan is accepted, the branch is created, and
+`api/project_branches/list` returns it — then the compute engine rejects the
+report:
+
+    api/ce/activity -> status FAILED, branch "feat", branchType BRANCH
+    errorMessage "Branches and Pull Requests are not supported in
+    Community Edition"
+
+That check is `AnalysisMetadataHolderImpl.setBranch` (line 129 of
+`server/sonar-ce-task-projectanalysis`), gated on
+`EditionProvider.Edition.COMMUNITY`. The feature commit adds 26 new files and
+never touches that class — its single deletion is an expected object count in
+`CeWsModuleTest`. The scanner and web-server halves are implemented; the
+compute-engine gate is not. `docs/community-branch-analysis.md` in the fork
+states "No Java agent or replacement web archive is required", while the
+upstream plugin it was derived from patches exactly this class with an agent.
+The doc and the code disagree.
+
+`scripts/smoke_sonarqube.sh` is the regression check and **currently fails**,
+on purpose. Run it on lab with a user token:
+
+    SONAR_TOKEN=squ_xxx ./scripts/smoke_sonarqube.sh
+
+Beware the weaker assertion it replaced: "the branch is in
+`project_branches/list`" **passes** against the broken server, because a
+branch is listed the moment the scanner registers it, with an empty status
+object. The script now asks for a *measure* on that branch, which exists only
+once the compute engine has analyzed it.
+
+### Never install a plugin through the web UI
+
+There is no `sonar.path.extensions`: a Marketplace plugin lands inside the
+release directory and the next deploy destroys it. Anything needed must be
+bundled in the fork, where a git SHA describes it. This is also what keeps
+"clone the Ansible repo and get this host back" true.
+
+Since 2026-10-13 the filesystem enforces this rather than merely documenting
+it. The unit runs `ProtectSystem=strict`, so the release tree is read-only at
+runtime and a Marketplace install fails outright instead of appearing to work
+until the next deploy. `extensions/downloads` is pre-created by
+`sonarqube-deploy` — the web server refuses to start without it, because
+`PluginDownloader.start()` throws if it cannot create it.
+
+### A dirty Elasticsearch index after a hard poweroff
+
+This box powers off nightly, and an unclean Elasticsearch shutdown can leave
+the index inconsistent — the symptom is SonarQube starting but projects or
+issues being missing or unsearchable. The index is **derived state**, rebuilt
+from PostgreSQL:
+
+    sudo systemctl stop sonarqube
+    sudo rm -rf /data/sonarqube/data/es*
+    sudo systemctl start sonarqube
+
+Reindexing takes a few minutes and loses nothing.
+
+### What a rebuild does not restore
+
+`ansible-playbook -i inventory/hosts.yml hosts/lab/main.yml --tags sonarqube`
+against a bare host restores the toolchain, the database, the checkout, a
+build, the service, the firewall rule and the route — one command, because the
+role runs `sonarqube-deploy` when `/opt/sonarqube/current` is absent.
+
+It does **not** restore the contents of PostgreSQL: projects, issues, analysis
+history, quality gates, users and tokens. No backup is taken, by Robert's
+decision on 2026-10-12. A rebuild gives a clean working server with no past
+analyses. If that ever stings, a nightly `pg_dump` at ~23:30 is the fix — not
+midnight, because the power role's shutdown window opens at 00:00 and the job
+would race the poweroff.
+
+### 🟡 The admin password is still the default
+
+`admin`/`admin` works on a LAN-reachable service. Change it in the UI (My
+Account → Security). It is deliberately not managed by Ansible: a password in
+this repo would be a password in a public repository, and the DB password
+pattern — generated on the host, never leaving it — does not fit a credential
+a human has to type.
+
+### Idle cost
+
+Measured 2026-10-13: **0.0176% of 32 cores**, against a
+`power_idle_cpu_max` of 5.0%. That is 1.69 CPU-seconds in a 300-second
+window — 0.56% of a single core — read from the unit's own cgroup accounting
+(`systemctl show sonarqube.service -p CPUUsageNSec`, sampled twice). Resident
+memory 3.61GB across 450 tasks and three JVMs. The load-average contribution
+is about 0.006.
+
+Comfortably clear, so SonarQube has no exclusion in the power role and gets no
+veto signal — an idle SonarQube means nobody is using it.
+
+**Why the cgroup and not `sar`:** the ambient numbers over the same hour were
+`ldavg-5` 1.06 and CPU 3.24%, which trips `power_idle_load_max` of 0.50 — and
+none of it was SonarQube. A `bobgpt-v1-tuning` run was holding one core at
+99.9%, and one core of 32 is 3.1%, which is essentially the whole ambient
+reading. `sar` measures the machine; the question here was what this one
+service costs. If you ever need to re-measure, measure the unit, or measure
+the machine with nothing else running on it.
+
+For the record, the real idle check's verdict during that window
+(`sudo /usr/local/sbin/lab-idle-shutdown --dry-run`) was *staying up* on four
+signals — load peak, beekeeper training, a CUDA context, and open login
+sessions — and SonarQube was not among them.
 
 ---
 
