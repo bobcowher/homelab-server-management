@@ -1,0 +1,21 @@
+{#
+  Rendered to /etc/gitconfig. See roles/bobgpt/tasks/main.yml.
+#}
+# Managed by Ansible. See roles/bobgpt/tasks/main.yml.
+#
+# git refuses to operate in a repository owned by another user -- "detected
+# dubious ownership in repository" -- and the check is on the OWNER alone.
+# Group ml, which is how everything else on this box is shared, does not
+# satisfy it. {{ bobgpt_root }}/src is owned by robertcowher and deployed by
+# two users, so the one that does not own it needs this exception.
+#
+# System-wide rather than in {{ bobgpt_deploy_user }}'s ~/.gitconfig: that
+# home directory is written by that service's own setup.sh, and the exception
+# is a property of this path rather than of one account. git reads exactly one
+# system-wide file, so a future entry belongs in THIS template -- a second
+# drop-in would simply not be read.
+#
+# Scope: this names one fixed deploy tree. It does not disable the ownership
+# check anywhere else.
+[safe]
+	directory = {{ bobgpt_root }}/src

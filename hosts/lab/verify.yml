@@ -1240,6 +1240,183 @@
                  and bobgpt_entrypoint.stat.executable | default(false))
       tags: [bobgpt]
 
+    # --- the deploy user -------------------------------------------------------
+    #
+    # A deploy is not this repo's code: deploy.sh in bobgptv1 does the git
+    # fetch/reset, builds the venv and restarts the unit. It has always run as
+    # robertcowher from the desktop; it is about to also run as
+    # {{ bobgpt_deploy_user }} on this host. BOTH must keep working, against
+    # one checkout, and these are the three things that stopped the second one.
+    #
+    # Measured on lab 2026-10-15, before any of this existed:
+    #
+    #   git as beekeeper      fatal: detected dubious ownership in repository
+    #                         -- git's check is on the OWNER, not the group, so
+    #                         group ml does not help
+    #   sudo restart bobgpt   not permitted (the sudoers drop-in beekeeper has
+    #                         names only its own unit)
+    #   mkdir as beekeeper    2755 -- umask 0022, so a directory beekeeper
+    #                         creates during a checkout or a pip install is one
+    #                         robertcowher's NEXT deploy cannot write into
+    #
+    # Only the third is latent: the first deploy would work and the one after
+    # it, from the other user, would fail on whatever new directory appeared.
+    - name: Probe the deploy user's git access to the checkout
+      ansible.builtin.command: >-
+        sudo -n -u {{ bobgpt_deploy_user }} git -C {{ bobgpt_root }}/src
+        rev-parse --abbrev-ref HEAD
+      register: bobgpt_deploy_git
+      changed_when: false
+      failed_when: false
+      tags: [bobgpt]
+
+    # Requires a branch name in stdout, not just rc == 0: every probe in this
+    # file that only checked an exit code has at some point passed because the
+    # command was broken rather than because the thing worked.
+    - name: The deploy user can run git in the checkout
+      ansible.builtin.assert:
+        that:
+          - bobgpt_deploy_git.rc == 0
+          - bobgpt_deploy_git.stdout | trim | length > 0
+        fail_msg: >-
+          {{ bobgpt_deploy_user }} cannot run git in {{ bobgpt_root }}/src
+          (rc={{ bobgpt_deploy_git.rc }}):
+          {{ bobgpt_deploy_git.stderr | default('') | trim }}
+          The checkout is owned by robertcowher, and git refuses a repository
+          it does not own unless the path is in safe.directory.
+      tags: [bobgpt]
+
+    # sudo -l answers "would this be allowed" without running it, which matters:
+    # `systemctl restart` on a stopped unit STARTS it, and this unit is
+    # deliberately not autostarted.
+    - name: Probe whether the deploy user may restart bobgpt
+      ansible.builtin.command: >-
+        sudo -l -U {{ bobgpt_deploy_user }} /usr/bin/systemctl restart bobgpt
+      register: bobgpt_deploy_sudo
+      become: true
+      changed_when: false
+      failed_when: false
+      tags: [bobgpt]
+
+    - name: The deploy user may restart bobgpt and nothing more
+      ansible.builtin.assert:
+        that:
+          - bobgpt_deploy_sudo.rc == 0
+          - "'systemctl restart bobgpt' in bobgpt_deploy_sudo.stdout"
+        fail_msg: >-
+          {{ bobgpt_deploy_user }} may not run `sudo systemctl restart bobgpt`
+          (rc={{ bobgpt_deploy_sudo.rc }}), which is the last line of
+          bobgptv1's deploy.sh. sudo -l said:
+          "{{ bobgpt_deploy_sudo.stdout | default('') | trim }}"
+      tags: [bobgpt]
+
+    - name: Read the ACL on the checkout
+      ansible.builtin.command: getfacl -p {{ bobgpt_root }}/src
+      register: bobgpt_src_acl
+      changed_when: false
+      tags: [bobgpt]
+
+    # The DEFAULT entry is the one that matters. setgid already fixes the group
+    # of anything created here; it does not fix the mode, and the mode is what
+    # umask 0022 gets wrong. A default ACL overrides umask, so a directory
+    # either user creates comes out group-writable and the other user can still
+    # deploy. Verified both ways on 2026-10-15: without it, a dir beekeeper
+    # created was 2755 and robertcowher could not write into it; with it, git
+    # and python both produced 2775 and cross-user create AND delete worked.
+    - name: Group ml inherits write on everything in the checkout
+      ansible.builtin.assert:
+        that:
+          - "'default:group:ml:rwx' in bobgpt_src_acl.stdout_lines"
+        fail_msg: >-
+          {{ bobgpt_root }}/src has no default ACL granting group ml write, so
+          a directory one deploy user creates is read-only to the other.
+          getfacl says:
+          {{ bobgpt_src_acl.stdout_lines | reject('match', '^#') | join(' ') }}
+      tags: [bobgpt]
+
+    - name: Check for the venv
+      ansible.builtin.stat:
+        path: "{{ bobgpt_root }}/venv"
+      register: bobgpt_venv_dir
+      tags: [bobgpt]
+
+    - name: Read the ACL on the venv
+      ansible.builtin.command: getfacl -p {{ bobgpt_root }}/venv
+      register: bobgpt_venv_acl
+      changed_when: false
+      when: bobgpt_venv_dir.stat.isdir | default(false)
+      tags: [bobgpt]
+
+    # Conditional, because the venv belongs to deploy.sh: Ansible never creates
+    # it, so a freshly provisioned host legitimately has none. Same reasoning as
+    # the serve.sh warning above -- the host contract is satisfied either way.
+    - name: Group ml inherits write on everything in the venv
+      ansible.builtin.assert:
+        that:
+          - "'default:group:ml:rwx' in bobgpt_venv_acl.stdout_lines"
+        fail_msg: >-
+          {{ bobgpt_root }}/venv has no default ACL granting group ml write, so
+          a package directory one deploy user installs is read-only to the
+          other. getfacl says:
+          {{ bobgpt_venv_acl.stdout_lines | reject('match', '^#') | join(' ') }}
+      when: bobgpt_venv_dir.stat.isdir | default(false)
+      tags: [bobgpt]
+
+    - name: Look for sticky directories in the deploy tree
+      ansible.builtin.command: >-
+        find {{ bobgpt_root }}/src {{ bobgpt_root }}/venv -xdev -type d -perm -1000
+      register: bobgpt_sticky
+      changed_when: false
+      failed_when: false
+      tags: [bobgpt]
+
+    # The other half of the default ACL, and the half that bites.
+    #
+    # On this kernel, coreutils `mkdir` inside a directory that has a default
+    # ACL sets the sticky bit (and setuid) as well -- measured 2026-10-15: 7775
+    # here, 5775 in the checkpoint tree, where the storage role's default ACL
+    # has produced the same effect since it shipped. git, python and
+    # `install -d` are unaffected, so a deploy never creates one; a hand
+    # `mkdir` does.
+    #
+    # A sticky directory is precisely the failure the ACL exists to prevent,
+    # arriving by the other road: only the owner may delete files in it, so the
+    # OTHER deploy user's `git reset --hard` fails there. Caught here because
+    # the symptom otherwise shows up as one unexplained "Operation not
+    # permitted" in a deploy log, days later. The fix is `chmod 2775` on the
+    # named directory.
+    - name: No directory in the deploy tree is sticky
+      ansible.builtin.assert:
+        that:
+          - bobgpt_sticky.stdout | trim | length == 0
+        fail_msg: >-
+          Sticky directories in the deploy tree:
+          {{ bobgpt_sticky.stdout_lines | join(', ') }}.
+          Only their owner can delete files inside them, so a deploy run by the
+          other user fails there. chmod 2775 each one.
+      tags: [bobgpt]
+
+    - name: The deploy sudoers drop-in parses
+      ansible.builtin.command: /usr/sbin/visudo -cf /etc/sudoers.d/bobgpt-deploy
+      register: bobgpt_sudoers_parse
+      become: true
+      changed_when: false
+      failed_when: false
+      tags: [bobgpt]
+
+    # A parse error under /etc/sudoers.d breaks sudo for every user on the box,
+    # so this is asserted separately from the grant itself -- with a broken file
+    # the probe above fails too, and this names which of the two it was.
+    - name: The deploy sudoers drop-in is valid
+      ansible.builtin.assert:
+        that:
+          - bobgpt_sudoers_parse.rc == 0
+        fail_msg: >-
+          /etc/sudoers.d/bobgpt-deploy does not parse
+          ({{ bobgpt_sudoers_parse.stdout | default('') | trim }}
+          {{ bobgpt_sudoers_parse.stderr | default('') | trim }}).
+      tags: [bobgpt]
+
     - name: Claude Code is installed for robertcowher
       ansible.builtin.command: /home/robertcowher/.local/bin/claude --version
       become: true

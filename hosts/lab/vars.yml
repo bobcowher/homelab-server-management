@@ -422,6 +422,16 @@ bobgpt_repo: https://github.com/bobcowher/bobgptv1.git
 # this value only decides what a freshly provisioned host starts on.
 bobgpt_branch: develop
 
+# The second user that runs bobgptv1's deploy.sh. Robert runs it as himself
+# from the desktop; beekeeper runs it on this host as part of a pipeline. The
+# checkout stays owned by robertcowher -- this is the account that gets the
+# three things a non-owner needs: git's safe.directory exception, an inherited
+# group-write ACL, and one sudo grant for the restart. It is a member of ml
+# already, which is what gets it as far as reading the tree.
+#
+# Set to "" to grant none of it (a host where only the owner deploys).
+bobgpt_deploy_user: beekeeper
+
 # NOT loopback, and this is not laxness. Open WebUI runs in a container and
 # reaches host services via host.docker.internal, which resolves to the Docker
 # bridge gateway (172.17.0.1) -- so a service bound to 127.0.0.1 is simply

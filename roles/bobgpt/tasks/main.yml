@@ -53,6 +53,82 @@
     group: ml
     mode: "2770"
 
+# --- the deploy user ---------------------------------------------------------
+#
+# bobgptv1's deploy.sh has always run as robertcowher over ssh from the
+# desktop. It is about to also run as {{ bobgpt_deploy_user }} on this host,
+# against the SAME checkout, and group membership is not enough for that:
+#
+#   git    refuses a repository owned by another user, and its check is on the
+#          owner alone -- being in group ml does not satisfy it.
+#   umask  the account's umask is 0022, so a directory it creates during a
+#          checkout or a pip install comes out 2755: readable by group ml,
+#          writable by nobody else. The deploy after it, from the other user,
+#          fails on that directory.
+#   sudo   restarting the unit needs root, and the drop-in beekeeper already
+#          has names only its own unit.
+#
+# The alternative was to let one user own everything. The tree stays owned by
+# robertcowher: he edits it by hand, and the service must never be able to
+# write its own code.
+- name: Grant group ml write on what is already in the bobgpt tree
+  ansible.posix.acl:
+    path: "{{ bobgpt_root }}"
+    entity: ml
+    etype: group
+    permissions: rwX
+    recursive: true
+    state: present
+  when: bobgpt_deploy_user | default('') | length > 0
+
+# The default entry is the one that does the work, and it is not implied by the
+# one above. setgid already fixes the GROUP of anything created here; a default
+# ACL is what fixes the MODE, because it overrides umask. Measured both ways on
+# 2026-10-15: without it, a directory beekeeper created was 2755 and
+# robertcowher could not write into it; with it, git and python both produced
+# 2775 and cross-user create and delete both worked.
+#
+# One side effect to know about, because it undoes the fix by another road: on
+# this kernel, coreutils `mkdir` inside a directory that has a default ACL also
+# sets the sticky bit (7775 here, 5775 in the checkpoint tree, where the
+# storage role's default ACL has done the same since it shipped). A sticky
+# directory lets only the owner delete files inside it, so the OTHER deploy
+# user's `git reset --hard` fails there. git, python and `install -d` are
+# unaffected and a deploy uses only those -- a hand `mkdir` is what creates
+# one, and verify.yml fails on any sticky directory in the tree so it is caught
+# before a deploy log blames something else.
+- name: Grant group ml write on what is written to the bobgpt tree later
+  ansible.posix.acl:
+    path: "{{ bobgpt_root }}"
+    entity: ml
+    etype: group
+    permissions: rwX
+    default: true
+    recursive: true
+    state: present
+  when: bobgpt_deploy_user | default('') | length > 0
+
+- name: Exempt the checkout from git's ownership check
+  ansible.builtin.template:
+    src: gitconfig.j2
+    dest: /etc/gitconfig
+    owner: root
+    group: root
+    mode: "0644"
+  when: bobgpt_deploy_user | default('') | length > 0
+
+- name: Install the deploy sudoers drop-in
+  ansible.builtin.template:
+    src: bobgpt-deploy-sudoers.j2
+    dest: /etc/sudoers.d/bobgpt-deploy
+    owner: root
+    group: root
+    mode: "0440"
+    # Not optional. A parse error under /etc/sudoers.d breaks sudo for every
+    # user on the box, including the one Ansible connects as.
+    validate: /usr/sbin/visudo -cf %s
+  when: bobgpt_deploy_user | default('') | length > 0
+
 - name: Create the host facts directory
   ansible.builtin.file:
     path: /etc/bobgpt

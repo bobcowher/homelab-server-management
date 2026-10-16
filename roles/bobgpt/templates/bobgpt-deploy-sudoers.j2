@@ -1,0 +1,31 @@
+{#
+  Rendered to /etc/sudoers.d/bobgpt-deploy. See roles/bobgpt/tasks/main.yml.
+#}
+# Managed by Ansible. Installed with visudo validation.
+#
+# The last line of bobgptv1's deploy.sh is `sudo systemctl restart bobgpt`, and
+# that is the only part of a deploy needing root: the checkout and the venv are
+# group-writable, so the git fetch and the pip install need nothing.
+#
+# Separate from /etc/sudoers.d/{{ bobgpt_deploy_user }}, which mirrors the sudo
+# calls that service makes for ITSELF. This file is bobgpt's grant to its
+# deployer, and it is this role that knows the unit name.
+#
+# Both spellings of the unit, because sudoers matches command arguments
+# literally: a grant for `restart bobgpt` does not authorise
+# `restart bobgpt.service`.
+#
+# On restart vs try-restart: the unit is deliberately installed NOT enabled,
+# because a GPU service on a training box is started by hand. `restart` on a
+# stopped unit STARTS it, so a deploy that lands while bobgpt is intentionally
+# down will bring it up. try-restart is granted as well for a pipeline that
+# would rather deploy the code and leave a stopped service stopped -- it is the
+# same choice the Ansible handler in this role already makes.
+#
+# No journalctl. This account cannot read the system journal (it is not in
+# group systemd-journal), so a failed deploy sees `systemctl status` and
+# nothing more. Widen that deliberately if a pipeline needs the log, rather
+# than by reaching for root.
+{{ bobgpt_deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart bobgpt, /usr/bin/systemctl restart bobgpt.service
+{{ bobgpt_deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl try-restart bobgpt, /usr/bin/systemctl try-restart bobgpt.service
+{{ bobgpt_deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl status bobgpt, /usr/bin/systemctl status bobgpt.service
