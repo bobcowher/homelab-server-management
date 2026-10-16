@@ -1,0 +1,55 @@
+#!/bin/bash
+# Managed by Ansible. See roles/bobgpt/tasks/main.yml.
+#
+# Print the tail of bobgpt.service's journal. Installed so the deploy user can
+# see why a deploy failed without being able to read anything else.
+#
+#   bobgpt-logs          the last 200 lines
+#   bobgpt-logs 500      the last 500
+#
+# Run as root through sudo; see /etc/sudoers.d/bobgpt-deploy.
+#
+# WHY THIS FILE EXISTS. A system unit's journal is readable by root, by group
+# systemd-journal and by group adm, and journald has no way to grant one unit's
+# log to one account. The two alternatives were both worse:
+#
+#   group systemd-journal   every log on the box, including other services'
+#   sudo journalctl -u bobgpt *
+#                           sudoers wildcards match FURTHER arguments, so
+#                           `-u bobgpt -u ssh` satisfies the pattern and prints
+#                           the ssh journal. The wildcard is the hole.
+#
+# So the unit name is not an argument here: it is a constant, and the only
+# thing the caller may choose is how many lines. That is what keeps the grant
+# scoped, which makes the argument handling below load-bearing rather than
+# defensive habit -- anything that reaches journalctl as an option reopens the
+# hole this file closes.
+set -euo pipefail
+
+UNIT=bobgpt.service
+DEFAULT_LINES=200
+MAX_LINES=5000
+
+usage() {
+    echo "usage: ${0##*/} [lines]   (1-${MAX_LINES}, default ${DEFAULT_LINES})" >&2
+    echo "prints the tail of ${UNIT}'s journal and nothing else" >&2
+    exit 64
+}
+
+[ $# -le 1 ] || usage
+
+lines=$DEFAULT_LINES
+if [ $# -eq 1 ]; then
+    # Digits only. This rejects "-u ssh", "--since=...", "-f", an empty string
+    # and a negative number in one test, which is the point: a value that is
+    # not a bare number never reaches journalctl at all.
+    case "$1" in
+        '' | *[!0-9]*) usage ;;
+    esac
+    lines=$1
+    [ "$lines" -ge 1 ] && [ "$lines" -le "$MAX_LINES" ] || usage
+fi
+
+# --lines=N rather than -n "$N": joined to the flag, a value can never be read
+# as the next option even if the checks above are ever loosened.
+exec /usr/bin/journalctl --no-pager --unit="$UNIT" --lines="$lines"

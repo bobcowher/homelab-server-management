@@ -22,10 +22,18 @@
 # would rather deploy the code and leave a stopped service stopped -- it is the
 # same choice the Ansible handler in this role already makes.
 #
-# No journalctl. This account cannot read the system journal (it is not in
-# group systemd-journal), so a failed deploy sees `systemctl status` and
-# nothing more. Widen that deliberately if a pipeline needs the log, rather
-# than by reaching for root.
+# The log, via a wrapper rather than journalctl itself. A system unit's journal
+# is readable by root, group systemd-journal and group adm, and journald cannot
+# scope any of that to one unit -- so `journalctl` here would be every log on
+# the box. `/usr/bin/journalctl -u bobgpt *` is no better: sudoers wildcards
+# match FURTHER arguments, so `-u bobgpt -u ssh` satisfies the pattern and
+# prints the ssh journal.
+#
+# {{ bobgpt_logs_bin }} takes a line count and nothing else; the unit is a
+# constant inside it. Granted with no argument restriction on purpose -- the
+# script is the validator, and scripts/test_bobgpt_logs.sh is what holds it to
+# that. It must stay root-owned and not writable by this account.
 {{ bobgpt_deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart bobgpt, /usr/bin/systemctl restart bobgpt.service
 {{ bobgpt_deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl try-restart bobgpt, /usr/bin/systemctl try-restart bobgpt.service
 {{ bobgpt_deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl status bobgpt, /usr/bin/systemctl status bobgpt.service
+{{ bobgpt_deploy_user }} ALL=(root) NOPASSWD: {{ bobgpt_logs_bin }}

@@ -398,6 +398,56 @@ Ansible clones the checkout **once** and never updates it (`update: false`),
 so a pull or a branch switch is never reverted by a playbook run. Change the
 branch on the box, not in `hosts/lab/vars.yml`.
 
+### Deploying as beekeeper rather than as yourself
+
+The checkout is owned by `robertcowher` and group `ml`, and **group membership
+alone is not enough to deploy from a second account.** Three things had to be
+granted, and each one fails in a way that does not name itself:
+
+| | Symptom without it |
+|---|---|
+| `safe.directory` in `/etc/gitconfig` | `fatal: detected dubious ownership in repository` — git's check is on the **owner**, so being in `ml` does not satisfy it |
+| default ACL `group:ml:rwx` on `/opt/bobgpt` | the *next* deploy, run by the other user, fails on whatever directory the previous one created — `umask 0022` makes them `2755` |
+| `/etc/sudoers.d/bobgpt-deploy` | `sudo systemctl restart bobgpt` is refused |
+
+`setgid` was already on the tree and is **not** sufficient: it fixes the group
+of a new file, not its mode, and the mode is what `umask` gets wrong. A default
+ACL overrides `umask`, which is why it is the fix.
+
+⚠️ **One side effect, and it undoes the fix by another road.** On this kernel,
+coreutils `mkdir` inside a directory that has a default ACL also sets the
+**sticky** bit (`7775` here; `5775` in the checkpoint tree, where the storage
+role's ACL has done the same since it shipped). A sticky directory lets only
+its owner delete files inside it — so the other user's `git reset --hard`
+fails there. `git`, `python` and `install -d` are unaffected, so a deploy never
+creates one; a hand `mkdir` in this tree does. `chmod 2775` it, and note that
+`verify.yml` fails on any sticky directory under `/opt/bobgpt` so this gets
+caught before a deploy log blames something else.
+
+`restart` **starts a stopped bobgpt**, which is not always what a pipeline
+wants from a unit that is deliberately not enabled. `try-restart` is granted
+too and leaves a stopped service stopped.
+
+The log needs a wrapper. A system unit's journal is readable by `root`, group
+`systemd-journal` and group `adm`, and journald cannot scope any of that to one
+unit — so the choice was every log on the box or a bounded reader:
+
+```bash
+sudo /usr/local/sbin/bobgpt-logs        # last 200 lines of bobgpt.service
+sudo /usr/local/sbin/bobgpt-logs 500
+```
+
+It takes a line count and nothing else; the unit is a constant inside it.
+`sudo journalctl -u bobgpt *` would have been simpler and is **wrong**:
+sudoers wildcards match further arguments, so `-u bobgpt -u ssh` satisfies the
+pattern and prints the ssh journal. `scripts/test_bobgpt_logs.sh` holds the
+wrapper to that boundary, and it must stay root-owned — it runs as root on a CI
+account's say-so.
+
+Beekeeper has **no ssh private key**, so it cannot run the repository's
+`deploy.sh` top-level: that script ssh's to lab. Its pipeline runs the host-side
+steps directly.
+
 ### Why it binds 0.0.0.0 and is still private
 
 Open WebUI is a container. It reaches host services through

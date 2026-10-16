@@ -117,6 +117,18 @@
     mode: "0644"
   when: bobgpt_deploy_user | default('') | length > 0
 
+# Root-owned and not writable by the deploy user -- this runs as root on that
+# account's say-so, so a file it could edit would be a root shell with extra
+# steps. verify.yml asserts the owner and the mode for that reason.
+- name: Install the bobgpt log reader
+  ansible.builtin.copy:
+    src: bobgpt-logs
+    dest: "{{ bobgpt_logs_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: bobgpt_deploy_user | default('') | length > 0
+
 - name: Install the deploy sudoers drop-in
   ansible.builtin.template:
     src: bobgpt-deploy-sudoers.j2

@@ -1417,6 +1417,102 @@
           {{ bobgpt_sudoers_parse.stderr | default('') | trim }}).
       tags: [bobgpt]
 
+    # A failed deploy needs the log, and the deploy user cannot read it: system
+    # unit logs are readable by root, group systemd-journal and group adm, and
+    # journald has no per-unit permission to grant. So the choice was between
+    # handing this account every log on the box and giving it one bounded
+    # reader. The reader is {{ bobgpt_logs_bin }}.
+    #
+    # Why not `sudo journalctl -u bobgpt *` in sudoers: wildcards match further
+    # arguments, so `-u bobgpt -u ssh` satisfies the pattern and prints the ssh
+    # journal. A wrapper that builds the journalctl command itself is the only
+    # version of this grant that stays scoped.
+    - name: Read the bobgpt log reader
+      ansible.builtin.stat:
+        path: "{{ bobgpt_logs_bin }}"
+      register: bobgpt_logs_stat
+      tags: [bobgpt]
+
+    # Owner and mode are the assertion that matters, not existence. This file
+    # runs as root on the deploy user's say-so, so a tree where that user could
+    # edit it is a root shell with extra steps.
+    - name: The log reader is root's alone to change
+      ansible.builtin.assert:
+        that:
+          - bobgpt_logs_stat.stat.exists
+          - bobgpt_logs_stat.stat.pw_name == 'root'
+          - bobgpt_logs_stat.stat.gr_name == 'root'
+          - bobgpt_logs_stat.stat.mode == '0755'
+        fail_msg: >-
+          {{ bobgpt_logs_bin }} is
+          {{ bobgpt_logs_stat.stat.pw_name | default('missing') }}:{{
+          bobgpt_logs_stat.stat.gr_name | default('-') }}
+          {{ bobgpt_logs_stat.stat.mode | default('-') }}.
+          It is run as root through sudo, so it must be owned by root and
+          writable by nobody else.
+      tags: [bobgpt]
+
+    - name: Probe the deploy user's access to bobgpt's log
+      ansible.builtin.command: >-
+        sudo -n -u {{ bobgpt_deploy_user }} sudo -n {{ bobgpt_logs_bin }} 5
+      register: bobgpt_logs_read
+      changed_when: false
+      failed_when: false
+      tags: [bobgpt]
+
+    - name: The deploy user can read bobgpt's log
+      ansible.builtin.assert:
+        that:
+          - bobgpt_logs_read.rc == 0
+          - "'bobgpt' in bobgpt_logs_read.stdout or 'No entries' in bobgpt_logs_read.stdout"
+        fail_msg: >-
+          {{ bobgpt_deploy_user }} cannot read bobgpt's log
+          (rc={{ bobgpt_logs_read.rc }}):
+          {{ bobgpt_logs_read.stderr | default('') | trim }}
+      tags: [bobgpt]
+
+    # The half that keeps the grant narrow, and the reason the wrapper exists at
+    # all. `-u ssh` must be refused rather than passed through.
+    - name: Probe the log reader with another unit's name
+      ansible.builtin.command: >-
+        sudo -n -u {{ bobgpt_deploy_user }} sudo -n {{ bobgpt_logs_bin }} -u ssh
+      register: bobgpt_logs_escape
+      changed_when: false
+      failed_when: false
+      tags: [bobgpt]
+
+    - name: The log reader refuses any unit but bobgpt
+      ansible.builtin.assert:
+        that:
+          - bobgpt_logs_escape.rc != 0
+          - "'ssh' not in bobgpt_logs_escape.stdout"
+        fail_msg: >-
+          {{ bobgpt_logs_bin }} accepted "-u ssh" (rc={{ bobgpt_logs_escape.rc
+          }}) and printed {{ bobgpt_logs_escape.stdout_lines | length }} lines.
+          It must take a line count and nothing else; the unit is the wrapper's
+          to decide.
+      tags: [bobgpt]
+
+    - name: Read the deploy user's groups
+      ansible.builtin.command: id -nG {{ bobgpt_deploy_user }}
+      register: bobgpt_deploy_groups
+      changed_when: false
+      tags: [bobgpt]
+
+    # The wrapper is pointless if the account also holds a group that reads the
+    # whole journal. Asserted because it is the easy "fix" to reach for next
+    # time this comes up, and it is the one this host declined.
+    - name: The deploy user cannot read the rest of the journal
+      ansible.builtin.assert:
+        that:
+          - "'systemd-journal' not in bobgpt_deploy_groups.stdout.split()"
+          - "'adm' not in bobgpt_deploy_groups.stdout.split()"
+        fail_msg: >-
+          {{ bobgpt_deploy_user }} is in {{ bobgpt_deploy_groups.stdout }}.
+          systemd-journal and adm both read every unit's log on this box; the
+          account gets bobgpt's log through {{ bobgpt_logs_bin }} instead.
+      tags: [bobgpt]
+
     - name: Claude Code is installed for robertcowher
       ansible.builtin.command: /home/robertcowher/.local/bin/claude --version
       become: true

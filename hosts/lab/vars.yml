@@ -432,6 +432,13 @@ bobgpt_branch: develop
 # Set to "" to grant none of it (a host where only the owner deploys).
 bobgpt_deploy_user: beekeeper
 
+# The deploy user's window onto bobgpt's journal. System unit logs are readable
+# by root, group systemd-journal and group adm, and journald can scope none of
+# that to one unit -- so the alternative to this wrapper was handing a CI
+# account every log on the box, including whatever other services put in
+# theirs. In /usr/local/sbin because it is only ever run as root.
+bobgpt_logs_bin: /usr/local/sbin/bobgpt-logs
+
 # NOT loopback, and this is not laxness. Open WebUI runs in a container and
 # reaches host services via host.docker.internal, which resolves to the Docker
 # bridge gateway (172.17.0.1) -- so a service bound to 127.0.0.1 is simply
