@@ -5,3 +5,9 @@
 - name: Update grub
   ansible.builtin.command: update-grub
   changed_when: true
+
+- name: Restart lab-crash-watch
+  ansible.builtin.systemd_service:
+    name: lab-crash-watch.service
+    state: restarted
+    daemon_reload: true

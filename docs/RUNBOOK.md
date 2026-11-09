@@ -1297,6 +1297,107 @@ listener process up on the desktop at the moment of failure, and on 2026-09-26 t
 
 ---
 
+### It happened again, and the log was already gone
+
+**2026-11-09.** The same fault, a second time. Read this before trusting any capture plumbing.
+
+The box was rebooted at 21:06 on 11-08 to recover from the first dropout. **It died again at
+22:16:15.** Nobody noticed for nineteen hours, because from the outside the box looks fine: ssh
+answers, services are "running", `uptime` works. Only the disk is gone.
+
+**The correlation is with training time, not uptime** (this is the other instance's finding in
+`nvme-dropout-2026-11-08.md`, and it is better supported than reading it as "70 minutes after a
+reboot"):
+
+| | run started | drive died | elapsed |
+|---|---|---|---|
+| Run 31 | 19:41 | ~20:55 | ~74 min |
+| Run 33 | 21:10 | 22:16 | ~66 min |
+
+Two points are not a pattern, but both landed about an hour into sustained GPU load, and the
+second had no rsync or large copy running at all — so a big write is **not** needed to trigger it.
+That points at heat or power delivery under load, and it is why the watcher now carries its own
+thermal history. Do not start a long training run until one of the experiments below has said
+something: at this rate lab cannot hold an overnight queue.
+
+**The evidence had already destroyed itself.** With root read-only, `systemd-journald` retries the
+write it cannot make roughly once a second and logs each failure to the kernel ring buffer:
+
+```
+systemd-journald[893]: Failed to write entry to /var/log/journal/.../system.journal
+(21 items, 707 bytes) despite vacuuming, ignoring: Read-only file system
+```
+
+About a megabyte an hour. The ring buffer held **twenty minutes**. The fault at 22:16 was long
+evicted by the time anyone looked, and **ramoops would have lost it too** — an 8 MB console ring
+recycles in about two and a half hours at that rate. Capacity was never the problem. Latency was.
+Anything that waits for a human loses this race.
+
+That is why `lab-crash-watch` exists and why it is a resident loop rather than a timer: by the time
+the disk is gone, nothing new can be paged in. On 11-09 even `pgrep` returned `Input/output error`,
+and its failure made a shell `if` take the wrong branch and report "no drain running" when the
+process was very much running. **Once root is dead, a non-zero exit means "the binary could not
+load", not "the answer is no".** Prefer `/proc` and bash builtins, and distrust any check that
+shelled out.
+
+#### What the second event added
+
+| Observation | Reading |
+|---|---|
+| `aer_dev_correctable/fatal/nonfatal` all zero | No PCIe error was ever signalled |
+| `01:00.0` `current_link_width=63`, speed `Unknown` | All-ones: the endpoint is not answering config reads |
+| Parent `00:01.1` still 16 GT/s ×4 | The root port is healthy; the device behind it is not |
+| `l1_aspm`, `l1_1_aspm`, `l1_1_pcipm` all `0` | **ASPM is ruled out** |
+| `nvme_core.default_ps_max_latency_us=100000` | APST is enabled and is now the leading suspect |
+| ext4 `errors_count=17`, first == last == 22:16:15 | All seventeen errors inside one second |
+
+A device that stops answering, with no error signalled, on a link that is still up and has ASPM
+off, is the signature of **a drive that entered a deep idle power state and never came back**.
+
+#### Two competing hypotheses
+
+**Heat or power under sustained GPU load** — favoured by the timing above. The M.2 slot sits near
+the 3090 and both failures came about an hour into a run. `lab-crash-watch` samples every NVMe
+hwmon sensor every 5 seconds and keeps the last hour in RAM, so the next snapshot answers "did the
+drive get hot before it went" without needing a second machine to log to.
+
+**APST** — favoured by the electrical evidence: no AER, no error signalled, link up, ASPM off.
+Tested below. The two are not exclusive, and both experiments can run at once.
+
+#### The APST experiment
+
+`diag_nvme_apst_max_latency_us: 0` in `hosts/lab/vars.yml` adds
+`nvme_core.default_ps_max_latency_us=0` to the kernel command line, which disables APST entirely.
+It is one variable and it is reversible — put it back to `100000`.
+
+It is a **test, not a fix**. Read the result honestly:
+
+- **A training run lasts materially longer than ~70 minutes** → evidence for APST, not proof.
+  Keep watching.
+- **Dropout at about the same point anyway** → APST is eliminated. Read the thermal history in
+  `/run/lab-crash-watch.txt`: a climb before the fault implicates heat, a flat trace leaves the
+  drive itself, the M.2 slot, or power delivery. At that point stop testing and replace the drive.
+
+#### ⚠️ A warm reboot may not bring the drive back
+
+On 11-09 `systemctl reboot` took the box down in under five seconds and it did **not** return —
+no ping, no ARP, thirteen minutes in. A NVMe that has dropped off the bus frequently needs power
+actually removed before it re-initialises. Budget for a physical power cycle, and remember lab is
+headless: if it comes up without a root filesystem it will sit somewhere you cannot see.
+
+This cuts against the ramoops advice above, and the ramoops advice still wins **when the box is
+reachable**: capture first, warm reset, read `/sys/fs/pstore`, and only then pull power. But if a
+warm reset leaves it dark, pull power — a drive that will not initialise is worth more than a
+ring buffer.
+
+#### `/data` is still unbacked
+
+Two deaths in twenty hours on a single drive with no backup, and the first one silently truncated
+55 of 197 files that `rsync` had reported as copied successfully. `restic` is installed and
+deliberately unconfigured (`roles/base/tasks/main.yml`). This is the open risk on this box.
+
+---
+
 ### tmux: "missing or unsuitable terminal: xterm-ghostty"
 
 `ssh` forwards `TERM` verbatim, so a session opened from Ghostty arrives on lab

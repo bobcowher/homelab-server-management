@@ -1,0 +1,182 @@
+#!/bin/bash
+# Managed by Ansible. See roles/diagnostics/tasks/main.yml.
+#
+# Why this exists, and why it is a resident loop rather than a timer.
+#
+# On 2026-11-09 lab's NVMe dropped off the bus for the second time in 20 hours.
+# By the time anyone looked, 19 hours later, the kernel's record of the fault
+# was gone: with root read-only, journald retries the write it cannot make
+# about once a second and logs each failure to the ring buffer, so roughly a
+# megabyte an hour of noise evicts everything older. The ring held 20 minutes.
+# ramoops would have lost it the same way -- an 8MB console ring recycles in
+# about two and a half hours at that rate. Capacity was never the problem;
+# latency was. The log has to be copied out within SECONDS of the fault.
+#
+# It cannot be a systemd timer or a oneshot, because once root is gone nothing
+# can be paged in -- on 2026-11-09 even `pgrep` returned EIO. Anything that
+# has to be LOADED at the moment of failure is already too late. So this stays
+# resident from boot, and everything it needs is parsed into memory before the
+# loop starts. The whole body lives in main() for exactly that reason: bash
+# parses the function to its end before executing a line of it, so the script
+# file is never read again and a dead disk cannot stop it.
+#
+# Builtins only -- no grep, cat, date, sed, awk. Output goes to /run (tmpfs).
+
+main() {
+    shopt -s nullglob
+
+    local out=/run/lab-crash-watch.txt
+    local poll=5
+    local kmsg_max_seconds=20
+    local kmsg_max_scan=20000
+    local latched=0
+    local line state size root_ro
+    # Rolling thermal history, because the competing hypothesis to APST is
+    # heat: both dropouts landed roughly 70 minutes INTO a training run (run
+    # 31 at ~74 min, run 33 at ~66 min), not at a fixed uptime. Sampling here
+    # means the temperature leading up to the fault is already in RAM when the
+    # fault happens -- no second service, no network, nothing to start late.
+    # 720 samples at 5s is the last hour, about 30 KB.
+    temps=()
+    temp_keep=720
+
+    # Sleeping without execing anything. /bin/sleep is a binary, and a binary
+    # is exactly what cannot be paged in once root is gone; `read -t` on
+    # /dev/zero or /dev/null returns instantly and would spin a core. So fork
+    # one bash child at boot that blocks forever on a read it will never get:
+    # it never writes, so reading its stdout blocks until the timeout, and it
+    # stays alive, so the pipe never reaches EOF. One fork, no exec, ever.
+    coproc SLEEPER { while :; do read -r _ || exit 0; done; }
+
+    while :; do
+        root_ro=0
+        state=''
+        size=''
+
+        while IFS= read -r line; do
+            case $line in
+                *' / '*emergency_ro*) root_ro=1 ;;
+            esac
+        done < /proc/mounts
+
+        for c in /sys/class/nvme/*/state; do
+            state=''
+            read -r state < "$c" 2>/dev/null
+            [ "$state" = live ] || root_ro=$(( root_ro | 2 ))
+        done
+
+        for b in /sys/block/nvme*/size; do
+            size=''
+            read -r size < "$b" 2>/dev/null
+            [ "$size" = 0 ] && root_ro=$(( root_ro | 4 ))
+        done
+
+        sample_temps
+
+        if [ "$root_ro" -ne 0 ] && [ "$latched" -eq 0 ]; then
+            latched=1
+            snapshot "$out" "$root_ro" "$kmsg_max_seconds" "$kmsg_max_scan"
+        fi
+
+        if [ -n "${SLEEPER[0]}" ]; then
+            read -r -t "$poll" -u "${SLEEPER[0]}" _ 2>/dev/null || :
+        else
+            # The coproc died. Keep watching rather than exiting, and accept
+            # the exec: a running watcher with a worse sleep beats none.
+            sleep "$poll" 2>/dev/null || :
+        fi
+    done
+}
+
+# Reads every NVMe hwmon sensor into the rolling history. Pure sysfs: no
+# smartctl, no nvme-cli, nothing that has to be paged in.
+sample_temps() {
+    local f v line='' label ctrl
+    for f in /sys/class/nvme/*/hwmon*/temp*_input; do
+        [ -r "$f" ] || continue
+        v=''
+        read -r v < "$f" 2>/dev/null
+        [ -n "$v" ] || continue
+        label=${f%_input}
+        label=${label##*/}
+        # Name the controller too: with more than one NVMe the bare temp1/2/3
+        # labels collide and the reading becomes unattributable.
+        ctrl=${f#/sys/class/nvme/}
+        ctrl=${ctrl%%/*}
+        # millidegrees -> whole degrees, no external arithmetic
+        line+="${ctrl}:${label}=$(( v / 1000 ))C "
+    done
+    [ -n "$line" ] || return 0
+    printf -v line '%(%H:%M:%S)T %s' -1 "$line"
+    temps+=("$line")
+    if [ "${#temps[@]}" -gt "$temp_keep" ]; then
+        temps=("${temps[@]: -temp_keep}")
+    fi
+}
+
+snapshot() {
+    local out=$1 reason=$2 max_seconds=$3 max_scan=$4
+    local line scanned=0 deadline
+
+    {
+        printf 'lab-crash-watch FIRED %(%Y-%m-%d %H:%M:%S)T\n' -1
+        printf 'reason-bits: %s (1=emergency_ro 2=nvme not live 4=size 0)\n' "$reason"
+
+        printf '\n--- mounts ---\n'
+        while IFS= read -r line; do
+            case $line in *' / '*|*' /boot '*) printf '%s\n' "$line" ;; esac
+        done < /proc/mounts
+
+        printf '\n--- nvme ---\n'
+        for c in /sys/class/nvme/*/; do
+            read -r line < "$c/state" 2>/dev/null
+            printf '%s state=%s\n' "${c%/}" "$line"
+        done
+        for b in /sys/block/nvme*/size; do
+            read -r line < "$b" 2>/dev/null
+            printf '%s size=%s\n' "${b%/size}" "$line"
+        done
+
+        printf '\n--- ext4 errors ---\n'
+        for d in /sys/fs/ext4/*/; do
+            [ -r "$d/errors_count" ] || continue
+            read -r line < "$d/errors_count"
+            [ "$line" = 0 ] && continue
+            printf '%s count=%s\n' "${d%/}" "$line"
+            for f in first_error_time first_error_func last_error_time last_error_func; do
+                [ -r "$d$f" ] || continue
+                read -r line < "$d$f"
+                printf '  %s=%s\n' "$f" "$line"
+            done
+        done
+
+        printf '\n--- nvme temperature, last %s samples at 5s ---\n' "${#temps[@]}"
+        if [ "${#temps[@]}" -eq 0 ]; then
+            printf '[no hwmon sensors found]\n'
+        else
+            for line in "${temps[@]}"; do printf '%s\n' "$line"; done
+        fi
+
+        printf '\n--- dirty ---\n'
+        while IFS= read -r line; do
+            case $line in Dirty:*|Writeback:*) printf '%s\n' "$line" ;; esac
+        done < /proc/meminfo
+
+        printf '\n--- kmsg (bounded) ---\n'
+        if { exec 4< /dev/kmsg; } 2>/dev/null; then
+            deadline=$(( SECONDS + max_seconds ))
+            while IFS= read -r -t 2 line; do
+                printf '%s\n' "$line"
+                scanned=$(( scanned + 1 ))
+                [ "$scanned" -ge "$max_scan" ] && { printf '[stopped: record cap]\n'; break; }
+                [ "$SECONDS" -ge "$deadline" ] && { printf '[stopped: time limit]\n'; break; }
+            done <&4
+            exec 4<&-
+        else
+            printf '[/dev/kmsg could not be opened]\n'
+        fi
+        printf 'kmsg-records: %s\n' "$scanned"
+    } > "$out" 2>/dev/null
+}
+
+main "$@"

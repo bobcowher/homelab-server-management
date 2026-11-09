@@ -110,6 +110,19 @@ Then:
 - Compare SMART against the table above.
 - Check for 0-byte files among anything written in the last few minutes.
 
+## Second dropout, 2026-11-08 22:16
+
+The same failure happened again 71 minutes after the 21:05 reboot. It was found the next day at 17:06.
+
+- **Time:** ext4 `first_error_time` was 22:16:15, with 17 errors. `nvme0` was `dead` with size 0, and `/` was `emergency_ro` again.
+- **Load:** Beekeeper run 33 alone on the 3090. There was no rsync or other copy, so a large copy is not needed to trigger it.
+- **Timing pattern:** both failures came about 70 minutes into a training run. Run 31 started at 19:41 and the drive failed around 20:55, about 74 minutes later. Run 33 started at 21:10 and the drive failed at 22:16, about 66 minutes later. Two cases are too few to call it a pattern, but it points toward heat or sustained load.
+- **AER:** all counters for `01:00.0` were 0 since boot, so no PCIe errors were reported before the device went away. Link speed now reads `Unknown` and width `63`, which means the link is down.
+- **Kernel log:** lost again. The drive was dead for about 19 hours before anyone checked. journald logs `Read-only file system` every second, and those messages filled the ring buffer and pushed out the NVMe lines. The capture steps above only work within minutes of the failure.
+- **Salvage:** files that are still in page cache can be read with `sudo cat` while the drive is dead. Binaries that aren't cached fail with `Input/output error`, including `tar`. This recovered run 33's step 3000 and 4000 checkpoints.
+
+**What this changes:** the drive now fails under training load within about an hour, so lab can't hold an overnight queue. The next run should log the drive's temperature to a different machine every 30 seconds, so a failure shows whether heat came before it.
+
 ## Possible follow-ups, not done
 
 - Run `sudo smartctl -t long /dev/nvme0` while idle. No self-test has ever been logged.

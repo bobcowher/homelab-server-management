@@ -568,3 +568,28 @@ diag_ramoops_console_size: 8388608
 diag_ramoops_record_size: 1048576
 
 diag_crash_capture_bin: /usr/local/sbin/lab-crash-capture
+diag_crash_watch_bin: /usr/local/sbin/lab-crash-watch
+
+# APST, disabled as a test and not as a known fix.
+#
+# The second dropout (2026-11-08 22:16, found 19 hours later on 11-09) gave
+# the evidence the first did not: ZERO PCIe AER errors of any kind, the
+# endpoint at 01:00.0 answering config reads with all-ones (link_width 63,
+# speed "Unknown") while its parent root port 00:01.1 still reported 16 GT/s
+# x4, and ASPM L1 off on that link (l1_aspm, l1_1_aspm, l1_1_pcipm all 0).
+# A device that stops answering with no error signalled, on a link that is
+# still up and has ASPM disabled, is the signature of a drive that entered a
+# deep idle power state and never came back out.
+#
+# APST is what grants it those states, and 100000 permits ones with exit
+# latencies up to 100ms. Setting 0 disables APST entirely. Consumer NVMe
+# dropouts of exactly this shape are a long-standing APST story.
+#
+# This is a one-variable experiment: set it back to 100000 to restore the
+# default. It is NOT the only hypothesis -- both dropouts landed about an hour
+# into a training run (run 31 ~74 min, run 33 ~66 min), which points at heat or
+# power delivery under GPU load instead, so lab-crash-watch also keeps an hour
+# of NVMe temperature in RAM. If a run lasts materially longer than ~70 minutes
+# that is evidence for APST; if it drops out at the same point anyway, APST is
+# eliminated and the thermal trace in /run/lab-crash-watch.txt is what to read.
+diag_nvme_apst_max_latency_us: 0

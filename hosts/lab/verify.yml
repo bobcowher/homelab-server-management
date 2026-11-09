@@ -2237,6 +2237,118 @@
       tags: [diagnostics]
       when: not (diag_ramoops_armed | bool)
 
+    # --- the resident watcher -------------------------------------------
+    #
+    # The hand-run capture script is not enough and 2026-11-09 proved it: the
+    # fault was found 19 hours late and journald, retrying writes to a
+    # read-only root about once a second, had already evicted the kernel's
+    # record of it from the ring buffer. These assert the watcher that closes
+    # that gap is installed AND running, because one that is merely installed
+    # catches nothing.
+    - name: Read the crash watcher script
+      ansible.builtin.slurp:
+        src: "{{ diag_crash_watch_bin }}"
+      register: diag_watch_src
+      tags: [diagnostics]
+
+    - name: The crash watcher must use no external binaries in its loop
+      ansible.builtin.assert:
+        that:
+          - "'coproc SLEEPER' in (diag_watch_src.content | b64decode)"
+          - "'main \"$@\"' in (diag_watch_src.content | b64decode)"
+        fail_msg: >-
+          The watcher must sleep via a coproc-held pipe, not /bin/sleep, and
+          must wrap its body in main() so bash parses the whole file before
+          running it. Once root is gone no binary can be paged in and no part
+          of the script can be re-read from disk.
+      tags: [diagnostics]
+
+    - name: Stat the crash watcher
+      ansible.builtin.stat:
+        path: "{{ diag_crash_watch_bin }}"
+      register: diag_watch_bin
+      tags: [diagnostics]
+
+    - name: The crash watcher must be root-owned and executable
+      ansible.builtin.assert:
+        that:
+          - diag_watch_bin.stat.exists
+          - diag_watch_bin.stat.pw_name == 'root'
+          - diag_watch_bin.stat.mode == '0755'
+        fail_msg: "{{ diag_crash_watch_bin }} must be root:root 0755 -- it reads /dev/kmsg."
+      tags: [diagnostics]
+
+    - name: Get the crash watcher service state
+      ansible.builtin.systemd_service:
+        name: lab-crash-watch.service
+      register: diag_watch_svc
+      changed_when: false
+      tags: [diagnostics]
+
+    - name: The crash watcher must be enabled and actually running
+      ansible.builtin.assert:
+        that:
+          - diag_watch_svc.status.UnitFileState == 'enabled'
+          - diag_watch_svc.status.ActiveState == 'active'
+          - diag_watch_svc.status.SubState == 'running'
+        fail_msg: >-
+          lab-crash-watch is not running. It only works if it is already
+          resident when the disk goes, so an installed-but-stopped watcher is
+          the same as no watcher at all.
+      tags: [diagnostics]
+
+    # It must be cheap enough to leave running forever. Measured at 0 CPU
+    # ticks over 12 seconds idle; this catches a regression that turns the
+    # sleep back into a busy loop.
+    - name: Measure the watcher's CPU time
+      ansible.builtin.shell: |
+        set -o pipefail
+        pid=$(systemctl show -p MainPID --value lab-crash-watch.service)
+        [ "$pid" = 0 ] && { echo "NOPID"; exit 0; }
+        awk '{print $14 + $15}' "/proc/$pid/stat"
+      args:
+        executable: /bin/bash
+      register: diag_watch_cpu
+      changed_when: false
+      failed_when: false
+      tags: [diagnostics]
+
+    - name: The watcher must not be burning CPU
+      ansible.builtin.assert:
+        that:
+          - diag_watch_cpu.stdout | trim != 'NOPID'
+          - (diag_watch_cpu.stdout | trim | int) < 6000
+        fail_msg: >-
+          lab-crash-watch has used {{ diag_watch_cpu.stdout | trim }} CPU ticks
+          (100 = 1 core-second). A poll loop that spins means the builtin sleep
+          regressed -- `read -t` on /dev/zero or /dev/null returns instantly.
+      tags: [diagnostics]
+
+    # The APST experiment. Asserting the drop-in carries it, and reporting
+    # separately whether the RUNNING kernel has it, which needs a reboot.
+    - name: The grub drop-in must carry the APST setting
+      ansible.builtin.assert:
+        that:
+          - "'nvme_core.default_ps_max_latency_us=' ~ diag_nvme_apst_max_latency_us in diag_grub_text"
+          - "'nvme_core.default_ps_max_latency_us=' ~ diag_nvme_apst_max_latency_us in diag_grubcfg_text"
+        fail_msg: >-
+          The APST experiment is missing from the grub drop-in or has not been
+          folded into /boot/grub/grub.cfg by update-grub.
+      vars:
+        diag_grub_text: "{{ diag_grub.content | b64decode }}"
+        diag_grubcfg_text: "{{ diag_grubcfg.content | b64decode }}"
+      tags: [diagnostics]
+
+    - name: Report whether the APST experiment is live on the running kernel
+      ansible.builtin.debug:
+        msg: >-
+          APST on the running kernel:
+          {{ 'DISABLED (experiment live)'
+             if 'nvme_core.default_ps_max_latency_us=0'
+                in (diag_cmdline.content | b64decode)
+             else 'still at the default -- the experiment arms on the next boot' }}
+      tags: [diagnostics]
+
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
 # host pattern turns every assertion below into a silent pass. This play runs

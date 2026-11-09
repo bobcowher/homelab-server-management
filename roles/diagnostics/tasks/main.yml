@@ -49,3 +49,36 @@
     owner: root
     group: root
     mode: "0755"
+
+# The capture script above is run BY HAND, after the fact. That was enough in
+# theory and not in practice: on 2026-11-09 the fault was found 19 hours late
+# and the kernel's record of it had already been evicted from the ring buffer
+# by journald retrying writes to a read-only root about once a second. A
+# capture path that depends on a human noticing loses that race, and so would
+# ramoops -- an 8MB console ring recycles in about 2.5 hours at that rate.
+# This watcher closes the gap: it is resident from boot and snapshots within
+# seconds of the fault, before the storm overwrites the evidence.
+- name: Install the resident crash watcher
+  ansible.builtin.copy:
+    src: lab-crash-watch
+    dest: "{{ diag_crash_watch_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart lab-crash-watch
+
+- name: Install the crash watcher unit
+  ansible.builtin.template:
+    src: lab-crash-watch.service.j2
+    dest: /etc/systemd/system/lab-crash-watch.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart lab-crash-watch
+
+- name: Enable and start the crash watcher
+  ansible.builtin.systemd_service:
+    name: lab-crash-watch.service
+    enabled: true
+    state: started
+    daemon_reload: true

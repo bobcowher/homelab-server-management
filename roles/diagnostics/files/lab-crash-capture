@@ -25,6 +25,15 @@ shopt -s nullglob
 OUT=/run/lab-crash-capture.txt
 KMSG_KEEP=60
 
+# A per-read timeout alone does NOT bound the kmsg drain, which is how this
+# script hung on 2026-11-09 instead of producing a report. Once root goes
+# read-only, journald retries the write it cannot make about once a second and
+# logs the failure to the ring buffer, so a fresh message always arrives before
+# `read -t` expires and the loop never ends. These two bound it absolutely:
+# a wall-clock deadline and a cap on records scanned, whichever comes first.
+KMSG_MAX_SECONDS=15
+KMSG_MAX_SCAN=20000
+
 collect() {
     printf 'lab-crash-capture %(%Y-%m-%d %H:%M:%S)T\n' -1
     krel=''
@@ -92,6 +101,9 @@ collect() {
     # waiting for messages that will never come.
     printf 'kmsg-tail:\n'
     matched=()
+    scanned=0
+    dropped=0
+    stopped=''
     # Root is precisely who may open /dev/kmsg (dmesg_restrict is on), so
     # check that rather than the file mode, which permits an open the kernel
     # then denies -- and the shell reports that denial on stderr whatever it
@@ -99,14 +111,31 @@ collect() {
     if [ "$EUID" -ne 0 ]; then
         printf '  /dev/kmsg needs root -- rerun with sudo\n'
     elif { exec 4< /dev/kmsg; } 2>/dev/null; then
+        deadline=$(( SECONDS + KMSG_MAX_SECONDS ))
         while IFS= read -r -t 2 line; do
+            scanned=$(( scanned + 1 ))
             case $line in
                 *nvme*|*"I/O error"*|*ext4*|*EXT4*|*AER*|*pcieport*|\
                 *"Hardware Error"*|*mce*|*MCE*|*ramoops*|*pstore*|\
                 *Xid*|*NVRM*|*AMD-Vi*|*IOMMU*|*lockup*|*"Call Trace"*|\
                 *"controller is down"*|*"probe failure"*|*timeout*)
-                    matched+=("$line") ;;
+                    matched+=("$line")
+                    # Keep the array bounded too: under a storm the matches
+                    # themselves run to hundreds of thousands of lines.
+                    if [ "${#matched[@]}" -gt $(( KMSG_KEEP * 4 )) ]; then
+                        matched=("${matched[@]: -KMSG_KEEP}")
+                        dropped=1
+                    fi
+                    ;;
             esac
+            if [ "$scanned" -ge "$KMSG_MAX_SCAN" ]; then
+                stopped='record cap'
+                break
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+                stopped='time limit'
+                break
+            fi
         done <&4
         exec 4<&-
     else
@@ -120,7 +149,16 @@ collect() {
         printf '  %s\n' "${matched[index]}"
         index=$(( index + 1 ))
     done
-    printf 'kmsg-matched: %s lines (showing last %s)\n' "$total" "$KMSG_KEEP"
+    printf 'kmsg-scanned: %s records\n' "$scanned"
+    if [ -n "$stopped" ]; then
+        printf 'kmsg-stopped: hit the %s -- the buffer is still being written to.\n' "$stopped"
+        printf '  A running message storm means the ORIGINAL fault has very likely\n'
+        printf '  already been evicted from the ring. Check lab-crash-watch output.\n'
+    fi
+    if [ "$dropped" -eq 1 ]; then
+        printf 'kmsg-dropped: earlier matches discarded to bound memory\n'
+    fi
+    printf 'kmsg-matched: showing last %s of the matches kept\n' "$KMSG_KEEP"
 
     printf -- '-------------------------------------------------------------\n'
     printf 'If the disk is dead: ramoops keeps the kernel log in DRAM, and DRAM\n'

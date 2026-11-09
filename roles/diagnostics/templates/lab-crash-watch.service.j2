@@ -1,0 +1,31 @@
+{#
+  Rendered to /etc/systemd/system/lab-crash-watch.service.
+  See roles/diagnostics/files/lab-crash-watch for why this is resident.
+#}
+[Unit]
+Description=Resident watcher that snapshots the kernel log when storage drops out
+Documentation=file://{{ diag_crash_watch_bin }}
+# Start as early as there is a /run to write into. It must already be running
+# before the fault, because once root is gone nothing new can be paged in.
+DefaultDependencies=no
+After=systemd-tmpfiles-setup.service
+Before=sysinit.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=simple
+ExecStart={{ diag_crash_watch_bin }}
+Restart=always
+RestartSec=5
+# It must survive the memory pressure that may accompany the fault it watches
+# for, and it costs nothing: measured at 0 CPU ticks over 12 seconds idle.
+OOMScoreAdjust=-900
+# No disk writes: output goes to /run, which is tmpfs.
+ProtectSystem=strict
+ReadWritePaths=/run
+# It reads /dev/kmsg, which dmesg_restrict limits to root.
+User=root
+
+[Install]
+WantedBy=sysinit.target
