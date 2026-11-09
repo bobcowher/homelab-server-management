@@ -2080,6 +2080,163 @@
           services under a running workload.
       tags: [power]
 
+
+    # --- diagnostics -------------------------------------------------------
+    #
+    # These assertions prove the crash-capture plumbing is CONFIGURED. They
+    # cannot prove it CAPTURES -- that needs a deliberate crash, which is
+    # `echo c > /proc/sysrq-trigger` followed by reading /sys/fs/pstore on the
+    # next boot. See docs/RUNBOOK.md. Do not read a green verify here as proof
+    # that the next crash will be recorded.
+    - name: Read the ramoops grub drop-in
+      ansible.builtin.slurp:
+        src: /etc/default/grub.d/ramoops.cfg
+      become: true
+      register: diag_grub
+      tags: [diagnostics]
+
+    - name: The ramoops drop-in reserves memory and points ramoops at it
+      ansible.builtin.assert:
+        that:
+          - "'reserve_mem=' ~ diag_ramoops_total ~ ':4096:' ~ diag_ramoops_region in diag_grub_text"
+          - "'ramoops.mem_name=' ~ diag_ramoops_region in diag_grub_text"
+          - "'ramoops.console_size=' ~ diag_ramoops_console_size in diag_grub_text"
+        fail_msg: >-
+          /etc/default/grub.d/ramoops.cfg does not carry the expected
+          parameters. Without mem_name matching the reserve_mem region name,
+          ramoops finds no memory and silently does nothing.
+      vars:
+        diag_grub_text: "{{ diag_grub.content | b64decode }}"
+      tags: [diagnostics]
+
+    # The drop-in only matters once update-grub has folded it into grub.cfg.
+    # Asserting the generated file is what proves the next boot gets the
+    # parameters -- the drop-in alone proves nothing.
+    - name: Read the generated grub config
+      ansible.builtin.slurp:
+        src: /boot/grub/grub.cfg
+      become: true
+      register: diag_grubcfg
+      tags: [diagnostics]
+
+    - name: The generated boot entries carry the ramoops parameters
+      ansible.builtin.assert:
+        that:
+          - "'ramoops.mem_name=' ~ diag_ramoops_region in diag_grubcfg_text"
+          - "'reserve_mem=' ~ diag_ramoops_total in diag_grubcfg_text"
+        fail_msg: >-
+          /boot/grub/grub.cfg has no ramoops parameters. The drop-in exists but
+          update-grub has not run, so the next boot will not arm ramoops.
+      vars:
+        diag_grubcfg_text: "{{ diag_grubcfg.content | b64decode }}"
+      tags: [diagnostics]
+
+    # ramoops matches no device, so nothing auto-loads it.
+    - name: Read the module-load drop-in
+      ansible.builtin.slurp:
+        src: /etc/modules-load.d/ramoops.conf
+      become: true
+      register: diag_modconf
+      tags: [diagnostics]
+
+    - name: ramoops is set to load at boot
+      ansible.builtin.assert:
+        that:
+          - "'ramoops' in (diag_modconf.content | b64decode)"
+        fail_msg: >-
+          /etc/modules-load.d/ramoops.conf does not request ramoops. The
+          reserved memory would sit unused.
+      tags: [diagnostics]
+
+    - name: Stat the crash capture script
+      ansible.builtin.stat:
+        path: "{{ diag_crash_capture_bin }}"
+      register: diag_capture
+      tags: [diagnostics]
+
+    - name: The crash capture script is root-owned and executable
+      ansible.builtin.assert:
+        that:
+          - diag_capture.stat.exists
+          - diag_capture.stat.pw_name == 'root'
+          - diag_capture.stat.gr_name == 'root'
+          - diag_capture.stat.mode == '0755'
+        fail_msg: >-
+          {{ diag_crash_capture_bin }} is missing or not root:root 0755.
+      tags: [diagnostics]
+
+    # Run it. It only reads /proc and /sys and writes under /run, so it is safe
+    # on a live box -- and a capture tool that has never been executed is not a
+    # tool. This is the assertion that would have caught a typo in it at 21:00
+    # on a night the disk was already gone.
+    - name: Run the crash capture script
+      ansible.builtin.command: "{{ diag_crash_capture_bin }}"
+      register: diag_capture_run
+      changed_when: false
+      become: true
+      tags: [diagnostics]
+
+    - name: The capture script reports the storage state it exists to report
+      ansible.builtin.assert:
+        that:
+          - "'nvme0:' in diag_capture_run.stdout"
+          - "'live' in diag_capture_run.stdout"
+          - "'root-mount:' in diag_capture_run.stdout"
+          - "'ext4-errors:' in diag_capture_run.stdout"
+          - "'dirty-kb:' in diag_capture_run.stdout"
+          - "'kmsg-tail:' in diag_capture_run.stdout"
+        fail_msg: >-
+          The capture script ran but did not report the expected fields.
+          Output was: {{ diag_capture_run.stdout | truncate(400) }}
+      tags: [diagnostics]
+
+    # Everything above is on-disk configuration. The two below are runtime, and
+    # they can only hold once the box has rebooted into the new command line.
+    - name: Read the running kernel command line
+      ansible.builtin.slurp:
+        src: /proc/cmdline
+      register: diag_cmdline
+      tags: [diagnostics]
+
+    - name: Record whether ramoops is armed in the running kernel
+      ansible.builtin.set_fact:
+        diag_ramoops_armed: >-
+          {{ 'ramoops.mem_name=' ~ diag_ramoops_region
+             in (diag_cmdline.content | b64decode) }}
+      tags: [diagnostics]
+
+    - name: Read the loaded modules
+      ansible.builtin.command: lsmod
+      register: diag_mods
+      changed_when: false
+      tags: [diagnostics]
+      when: diag_ramoops_armed | bool
+
+    - name: ramoops is loaded and registered as the pstore backend
+      ansible.builtin.assert:
+        that:
+          - "'ramoops' in diag_mods.stdout"
+          - "'Registered ramoops as persistent store backend' in diag_kmsg.stdout"
+        fail_msg: >-
+          The kernel booted with the ramoops parameters but the backend did not
+          register. Check `journalctl -b 0 -k | grep -i ramoops` -- a region
+          that is too small or a name mismatch fails quietly here.
+      tags: [diagnostics]
+      when: diag_ramoops_armed | bool
+
+    # Not an assertion failure: the parameters are on disk and correct, and
+    # arming them needs a reboot that this playbook must never perform on a box
+    # that may be mid-training.
+    - name: Say plainly that ramoops is configured but not yet armed
+      ansible.builtin.debug:
+        msg: >-
+          ramoops is configured but NOT armed: the running kernel was booted
+          before the parameters were added. It will arm on the next boot, and
+          it is unproven until the sysrq test in docs/RUNBOOK.md has produced a
+          file under /sys/fs/pstore.
+      tags: [diagnostics]
+      when: not (diag_ramoops_armed | bool)
+
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
 # host pattern turns every assertion below into a silent pass. This play runs

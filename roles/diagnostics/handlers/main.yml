@@ -1,0 +1,7 @@
+---
+# Regenerates /boot/grub/grub.cfg so the drop-in reaches the next boot. The
+# drop-in on its own changes nothing; verify.yml asserts the generated file for
+# that reason.
+- name: Update grub
+  ansible.builtin.command: update-grub
+  changed_when: true

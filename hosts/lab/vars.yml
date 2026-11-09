@@ -537,3 +537,34 @@ sonarqube_start_timeout: 300
 sonarqube_scanner_version: "8.1.0.6389"
 sonarqube_scanner_sha256: "bb8f709f9cb73352f8d1260a3b3c506c0f41146754bc630762c126d795499d0b"
 sonarqube_scanner_root: /opt/sonar-scanner
+
+# --- crash diagnostics -------------------------------------------------------
+#
+# lab's only NVMe dropped off the bus on 2026-11-08 (state=dead, size 0) and
+# took root with it; see nvme-dropout-2026-11-08.md. The kernel's messages
+# about it were never recoverable, because every persistent store needs the
+# disk that failed: journald could not write, kdump was off (USE_KDUMP=0) and
+# would have targeted /var/crash anyway, and efi_pstore only records on a panic
+# -- and nothing panicked, because root is mounted errors=continue, so a dead
+# disk becomes emergency_ro rather than a crash.
+#
+# ramoops is the one capture path that needs neither the disk nor the network:
+# it writes the kernel ring buffer into a reserved DRAM region and the region
+# survives a warm reboot. It is also cause-agnostic -- it records whatever the
+# kernel printed, so it covers the NIC/IOMMU fault storm seen on 2026-09-26 and
+# a plain lockup just as well as another disk dropout.
+#
+# reserve_mem names the region on the kernel command line and ramoops.mem_name
+# finds it by that name, which avoids hardcoding a physical address.
+diag_ramoops_region: oops
+diag_ramoops_total: 24M
+
+# console_size is the load-bearing one, and the reason a default ramoops setup
+# would NOT have caught 2026-11-08. The dmesg records (record_size) are only
+# written on an oops or a panic. console_size makes ramoops a console and
+# records continuously, which is what captures nvme timeouts on a box that
+# never panicked.
+diag_ramoops_console_size: 8388608
+diag_ramoops_record_size: 1048576
+
+diag_crash_capture_bin: /usr/local/sbin/lab-crash-capture

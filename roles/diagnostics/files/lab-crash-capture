@@ -1,0 +1,137 @@
+#!/bin/bash
+# Managed by Ansible. See roles/diagnostics/tasks/main.yml.
+#
+# Captures the state that is lost forever the moment lab is rebooted. Run it
+# BEFORE rebooting a box whose disk has gone, then read it off the screen or
+# copy it off over ssh:
+#
+#   sudo /usr/local/sbin/lab-crash-capture
+#
+# WRITTEN IN BASH BUILTINS ON PURPOSE. When the root disk drops out, anything
+# not already resident in page cache cannot be paged in -- on 2026-11-08
+# `dmesg` and then `uptime` both failed with EIO, and grep may fail the same
+# way. So there is no grep, sed, awk, cat, tail or date here: pattern matching,
+# `read`, printf's %(..)T and arrays only. The one write goes to /run, which is
+# tmpfs, because the disk is the thing that failed.
+#
+# Everything it prints is also the baseline to diff against: a healthy run
+# shows state=live, a full size, zero ext4 errors and a clean root mount.
+
+# No `set -e`. Every section is independent and a crashing box will make some
+# of them fail; the point is to print as much as still works, not to stop at
+# the first unreadable file.
+shopt -s nullglob
+
+OUT=/run/lab-crash-capture.txt
+KMSG_KEEP=60
+
+collect() {
+    printf 'lab-crash-capture %(%Y-%m-%d %H:%M:%S)T\n' -1
+    krel=''
+    read -r krel < /proc/sys/kernel/osrelease
+    printf 'host %s  kernel %s\n' "${HOSTNAME:-?}" "${krel:-?}"
+    printf -- '-------------------------------------------------------------\n'
+
+    # The two files that settled it on 2026-11-08: a controller reporting
+    # "dead" with a zero-sector namespace is the drive off the bus, not a
+    # filesystem problem.
+    for dev in /sys/class/nvme/nvme*; do
+        state=''
+        read -r state < "$dev/state"
+        printf '%s: state=%s\n' "${dev##*/}" "${state:-UNREADABLE}"
+    done
+    for blk in /sys/block/nvme* /sys/block/sd*; do
+        size=''
+        read -r size < "$blk/size"
+        printf '%s: size=%s sectors\n' "${blk##*/}" "${size:-UNREADABLE}"
+    done
+
+    # The mount line still said "rw" while root was unusable. emergency_ro in
+    # the options is the flag that matters.
+    while read -r src mnt fstype opts _; do
+        if [ "$mnt" = / ]; then
+            printf 'root-mount: %s %s %s\n' "$src" "$fstype" "$opts"
+        fi
+    done < /proc/mounts
+
+    # These counters live only in sysfs. They are NOT written back to the
+    # superblock when the disk is gone, so they are zero again after a reboot
+    # and this is the only chance to read them.
+    for fs in /sys/fs/ext4/*; do
+        [ -f "$fs/errors_count" ] || continue
+        count=''; first=''; last=''; ftime=''; ltime=''
+        read -r count < "$fs/errors_count"
+        read -r first < "$fs/first_error_func"
+        read -r last  < "$fs/last_error_func"
+        read -r ftime < "$fs/first_error_time"
+        read -r ltime < "$fs/last_error_time"
+        printf 'ext4-errors: %s count=%s first=%s@%s last=%s@%s\n' \
+            "${fs##*/}" "${count:-?}" "${first:--}" "${ftime:-0}" \
+            "${last:--}" "${ltime:-0}"
+    done
+
+    # Dirty pages that cannot drain are data already lost. ~2.4GB on
+    # 2026-11-08, which is where the 55 zero-byte files came from.
+    while read -r key value _; do
+        case $key in
+            Dirty:|Writeback:|WritebackTmp:|NFS_Unstable:)
+                printf 'dirty-kb: %-14s %s\n' "$key" "$value" ;;
+        esac
+    done < /proc/meminfo
+
+    printf 'pstore-now:\n'
+    for f in /sys/fs/pstore/*; do
+        printf '  %s\n' "${f##*/}"
+    done
+    # Printed as a path, NOT globbed: it lives on the disk that may be dead,
+    # and touching it could block this script.
+    printf 'pstore-archived: look in /var/lib/systemd/pstore/ after the reboot\n'
+
+    # /dev/kmsg is the ring buffer itself, so this works when dmesg does not.
+    # The -t timeout is required: a read at the end of the buffer blocks
+    # waiting for messages that will never come.
+    printf 'kmsg-tail:\n'
+    matched=()
+    # Root is precisely who may open /dev/kmsg (dmesg_restrict is on), so
+    # check that rather than the file mode, which permits an open the kernel
+    # then denies -- and the shell reports that denial on stderr whatever it
+    # is wrapped in.
+    if [ "$EUID" -ne 0 ]; then
+        printf '  /dev/kmsg needs root -- rerun with sudo\n'
+    elif { exec 4< /dev/kmsg; } 2>/dev/null; then
+        while IFS= read -r -t 2 line; do
+            case $line in
+                *nvme*|*"I/O error"*|*ext4*|*EXT4*|*AER*|*pcieport*|\
+                *"Hardware Error"*|*mce*|*MCE*|*ramoops*|*pstore*|\
+                *Xid*|*NVRM*|*AMD-Vi*|*IOMMU*|*lockup*|*"Call Trace"*|\
+                *"controller is down"*|*"probe failure"*|*timeout*)
+                    matched+=("$line") ;;
+            esac
+        done <&4
+        exec 4<&-
+    else
+        printf '  /dev/kmsg could not be opened\n'
+    fi
+    total=${#matched[@]}
+    start=0
+    [ "$total" -gt "$KMSG_KEEP" ] && start=$(( total - KMSG_KEEP ))
+    index=$start
+    while [ "$index" -lt "$total" ]; do
+        printf '  %s\n' "${matched[index]}"
+        index=$(( index + 1 ))
+    done
+    printf 'kmsg-matched: %s lines (showing last %s)\n' "$total" "$KMSG_KEEP"
+
+    printf -- '-------------------------------------------------------------\n'
+    printf 'If the disk is dead: ramoops keeps the kernel log in DRAM, and DRAM\n'
+    printf 'survives a RESET but not a power-off. Reboot warm (reboot -f or the\n'
+    printf 'reset button), read /sys/fs/pstore, and only then power-cycle.\n'
+}
+
+body=$(collect)
+printf '%s\n' "$body"
+if { printf '%s\n' "$body" > "$OUT"; } 2>/dev/null; then
+    printf 'saved: %s\n' "$OUT"
+else
+    printf 'not saved to %s -- copy the text above off the box by hand\n' "$OUT"
+fi

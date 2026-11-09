@@ -1188,6 +1188,115 @@ recur silently.
 
 ---
 
+### The disk disappears while the box stays up
+
+Traced on 2026-11-08, and a **different fault** from the one above — the NIC swap on 2026-09-27
+held, and this was the first stop in the six weeks after it. Full write-up in
+`nvme-dropout-2026-11-08.md` at the repo root.
+
+The only NVMe left the bus while training ran. The box stayed up, so this does not look like the
+r8169 stop: services answered for a few minutes, then everything touching the disk returned
+`Input/output error` — `dmesg` and `uptime` both failed that way over SSH.
+
+```
+/sys/class/nvme/nvme0/state      dead          <-- the drive, not the filesystem
+/sys/block/nvme0n1/size          0
+/proc/mounts  /                  ext4 rw,relatime,emergency_ro
+/sys/fs/ext4/dm-0/errors_count   11            first at ext4_journal_check_start
+Dirty in /proc/meminfo           ~2.4 GB, not draining
+```
+
+Two traps in reading it afterwards:
+
+- **The mount line still says `rw`.** `emergency_ro` in the options is the flag that matters.
+- **Those ext4 counters are gone after a reboot.** Writing them back to the superblock needs the
+  disk that failed, so `dumpe2fs -h` shows a clean filesystem with no error count and that is *not*
+  evidence the errors never happened. Read them from sysfs while it is down or lose them.
+
+Likewise the journal's last entry does **not** date the failure — it is buffered before it is
+written. On 2026-11-08 the journal stopped at 20:50:45 and a 167 MB checkpoint committed intact at
+20:51:22, four minutes before the first ext4 error. To find the real last moment of life:
+
+```bash
+sudo find / -xdev -newermt "<last journal entry>" -printf '%TH:%TM:%.2TS %10s %p\n' | sort | tail
+```
+
+What SMART will tell you: **nothing.** It was pristine before and after — 0 media errors, 100%
+spare, 9% used. Its 2,443 error-log entries are all one benign `Invalid Field in Command` on the
+admin queue, which is the kernel probing a log page this drive does not support. There is also **no
+firmware update** for `P9CR40A`; LVFS has none, and the two updates `fwupdmgr` offers are Secure
+Boot `dbx`.
+
+Also check for silent truncation. `rsync` reported success and 55 of 197 files in
+`/data/datasets/franka-kitchen-v2-clean` were 0 bytes afterwards — its exit code does not prove the
+data landed, because the loss was in those undrained dirty pages.
+
+```bash
+find <dir> -type f -size 0        # anything written in the last few minutes
+```
+
+Causes still open as of 2026-11-08: APST power states, the PCIe link or seating, power delivery
+under sustained GPU load, and the drive's controller. No evidence favours any of them. Change one
+thing at a time so a fix can be attributed.
+
+---
+
+### Capturing a crash that leaves no log
+
+Both stops above lost the kernel's own account of them, for the same reason: every persistent store
+needs the disk. journald could not write; `kdump` was off (`USE_KDUMP=0`) and targets `/var/crash`
+anyway; `efi_pstore` only records on a panic, and **nothing panicked** — root is mounted
+`errors=continue`, so a dead disk becomes `emergency_ro` rather than a crash.
+
+The `diagnostics` role closes that with **ramoops**, which needs neither the disk nor the network:
+it writes the kernel ring buffer into a reserved DRAM region. It is cause-agnostic, so it records a
+NIC fault storm or a plain lockup as readily as another dropout.
+
+```bash
+cat /proc/cmdline | tr ' ' '\n' | grep -E 'reserve_mem|ramoops'
+```
+
+`reserve_mem=24M:4096:oops` names a region and `ramoops.mem_name=oops` finds it by name, so no
+physical address is hardcoded. **`ramoops.console_size=8388608` is the load-bearing part** — the
+dmesg records are only written on an oops or panic, which is exactly what 2026-11-08 was not.
+`console_size` makes ramoops a console and records continuously.
+
+#### ⚠️ Reboot warm, or you destroy the evidence
+
+DRAM keeps its contents across a **reset**, not across a power cut. This reverses the usual advice:
+
+1. Run `sudo /usr/local/sbin/lab-crash-capture` **first**, before touching anything. It is bash
+   builtins only on purpose — when root is gone, `grep` and `dmesg` cannot be paged in, and it
+   writes to `/run`, which is tmpfs. Read it off the screen or `scp` it; a photo is fine.
+2. Reboot **warm** — `reboot -f` or the reset button. **Not** a power-off.
+3. Read the capture: `ls /sys/fs/pstore/` then `sudo cat /sys/fs/pstore/console-ramoops-0`.
+   `systemd-pstore` moves it to `/var/lib/systemd/pstore/` early in boot, so look there too.
+4. Only then power-cycle, if you still want to.
+
+#### It is unproven until this test passes
+
+A green `verify.yml` proves the parameters are on disk and in `grub.cfg`. It does **not** prove
+capture works — some firmware scrubs memory during init. Prove it once, on an idle box with nothing
+training:
+
+```bash
+sudo sync
+sudo bash -c 'echo c > /proc/sysrq-trigger'    # deliberate panic; the box dies instantly
+# after it comes back up:
+ls /sys/fs/pstore/ /var/lib/systemd/pstore/*
+```
+
+A file there means ramoops survives a reset on this board. An empty `/sys/fs/pstore` means it does
+not, and the fallback is a log device independent of the NVMe — both SATA ports are empty
+(`ata1`/`ata2` link down), so a small SSD or even a USB stick with its own filesystem would do, and
+unlike ramoops it survives a power-off.
+
+`netconsole` was considered and rejected as the primary: it is UDP with no retransmit, needs a
+listener process up on the desktop at the moment of failure, and on 2026-09-26 the implicated device
+*was* the NIC. Useful as a supplement, not as the thing you rely on.
+
+---
+
 ### tmux: "missing or unsuitable terminal: xterm-ghostty"
 
 `ssh` forwards `TERM` verbatim, so a session opened from Ghostty arrives on lab

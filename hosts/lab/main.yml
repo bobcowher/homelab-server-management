@@ -9,6 +9,10 @@
   roles:
     - { role: base, tags: [base] }
     - { role: users, tags: [users] }
+    # Early: it only writes a grub drop-in, a modules-load drop-in and a
+    # script, and it must be in place before the next crash rather than
+    # after whatever else changes on the box.
+    - { role: diagnostics, tags: [diagnostics] }
     - { role: storage, tags: [storage] }
     - { role: nvidia, tags: [nvidia] }
     - { role: docker, tags: [docker] }

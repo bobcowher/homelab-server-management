@@ -1,0 +1,18 @@
+{#
+  Rendered to /etc/default/grub.d/ramoops.cfg. See roles/diagnostics/tasks/main.yml.
+  Files in /etc/default/grub.d are SOURCED by grub-mkconfig, so this is shell:
+  appending to the variable preserves whatever other drop-ins have set, which
+  matters because kdump-tools.cfg already puts crashkernel= there.
+#}
+# Managed by Ansible.
+#
+# reserve_mem carves a named region out of DRAM before the allocators start,
+# and ramoops.mem_name finds it by that name. The pair exists so this does not
+# have to hardcode a physical address that a BIOS update could invalidate.
+#
+# console_size is why this is configured rather than left at ramoops defaults.
+# The dmesg records are only written on an oops or a panic, and the failure
+# this was built for -- 2026-11-08, the only NVMe going state=dead while the
+# box stayed up -- never panicked. console_size makes ramoops a console and
+# records continuously, so the nvme timeouts land in RAM as they are printed.
+GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT reserve_mem={{ diag_ramoops_total }}:4096:{{ diag_ramoops_region }} ramoops.mem_name={{ diag_ramoops_region }} ramoops.console_size={{ diag_ramoops_console_size }} ramoops.record_size={{ diag_ramoops_record_size }}"

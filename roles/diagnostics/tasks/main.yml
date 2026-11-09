@@ -1,0 +1,51 @@
+---
+# Makes lab's next hard failure diagnosable. Nothing here treats a cause as
+# known: on 2026-11-08 the only NVMe went state=dead/size=0 and root went
+# emergency_ro, and the kernel's messages about it were unrecoverable because
+# every persistent store needs the disk that failed. See vars.yml for why
+# journald, kdump and efi_pstore each came back empty, and
+# nvme-dropout-2026-11-08.md for the live observation.
+#
+# This role does NOT reboot. The parameters below arm at the next boot, and
+# until then verify.yml says so out loud rather than passing quietly.
+
+- name: Reserve memory for ramoops on the kernel command line
+  ansible.builtin.template:
+    src: ramoops.cfg.j2
+    dest: /etc/default/grub.d/ramoops.cfg
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Update grub
+
+# ramoops binds to no device, so nothing auto-loads it and the reserved region
+# would sit unused. Deliberately not loaded here: without reserve_mem in the
+# RUNNING kernel's command line there is no region to attach to, so a load now
+# would only fail and log noise. It loads on the boot that arms it.
+- name: Load ramoops at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/ramoops.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Managed by Ansible. ramoops matches no device and will not autoload.
+      ramoops
+
+# Moves /sys/fs/pstore into /var/lib/systemd/pstore early on the next boot, so
+# a capture is kept rather than overwritten by the boot after it. Already
+# enabled on this host; stated here so it is intent rather than luck.
+- name: Keep pstore captures across reboots
+  ansible.builtin.systemd_service:
+    name: systemd-pstore.service
+    enabled: true
+
+# Read-only, and written in bash builtins on purpose -- see the script header.
+# Root-owned because it reads /dev/kmsg.
+- name: Install the crash capture script
+  ansible.builtin.copy:
+    src: lab-crash-capture
+    dest: "{{ diag_crash_capture_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
