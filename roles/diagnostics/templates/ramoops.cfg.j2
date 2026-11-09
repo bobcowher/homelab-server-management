@@ -15,7 +15,11 @@
 # this was built for -- 2026-11-08, the only NVMe going state=dead while the
 # box stayed up -- never panicked. console_size makes ramoops a console and
 # records continuously, so the nvme timeouts land in RAM as they are printed.
-GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT reserve_mem={{ diag_ramoops_total }}:4096:{{ diag_ramoops_region }} ramoops.mem_name={{ diag_ramoops_region }} ramoops.console_size={{ diag_ramoops_console_size }} ramoops.record_size={{ diag_ramoops_record_size }}"
+# pstore.backend is NOT optional here. pstore accepts one backend and the
+# first to register wins; on 2026-11-09 efi_pstore won and ramoops failed with
+# -EBUSY while every configuration check still passed. Naming the backend is
+# what makes the rest of this line do anything. See vars.yml.
+GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT pstore.backend={{ diag_pstore_backend }} reserve_mem={{ diag_ramoops_total }}:4096:{{ diag_ramoops_region }} ramoops.mem_name={{ diag_ramoops_region }} ramoops.console_size={{ diag_ramoops_console_size }} ramoops.record_size={{ diag_ramoops_record_size }}"
 
 # Disables APST. This is an experiment against the leading suspect for the two
 # NVMe dropouts, not a setting anyone wants permanently -- see vars.yml, and

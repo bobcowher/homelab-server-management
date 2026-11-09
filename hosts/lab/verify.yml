@@ -2101,6 +2101,7 @@
           - "'reserve_mem=' ~ diag_ramoops_total ~ ':4096:' ~ diag_ramoops_region in diag_grub_text"
           - "'ramoops.mem_name=' ~ diag_ramoops_region in diag_grub_text"
           - "'ramoops.console_size=' ~ diag_ramoops_console_size in diag_grub_text"
+          - "'pstore.backend=' ~ diag_pstore_backend in diag_grub_text"
         fail_msg: >-
           /etc/default/grub.d/ramoops.cfg does not carry the expected
           parameters. Without mem_name matching the reserve_mem region name,
@@ -2124,6 +2125,7 @@
         that:
           - "'ramoops.mem_name=' ~ diag_ramoops_region in diag_grubcfg_text"
           - "'reserve_mem=' ~ diag_ramoops_total in diag_grubcfg_text"
+          - "'pstore.backend=' ~ diag_pstore_backend in diag_grubcfg_text"
         fail_msg: >-
           /boot/grub/grub.cfg has no ramoops parameters. The drop-in exists but
           update-grub has not run, so the next boot will not arm ramoops.
@@ -2212,21 +2214,44 @@
       tags: [diagnostics]
       when: diag_ramoops_armed | bool
 
-    - name: ramoops is loaded and registered as the pstore backend
-      ansible.builtin.assert:
-        that:
-          - "'ramoops' in diag_mods.stdout"
-          - "'Registered ramoops as persistent store backend' in diag_kmsg.stdout"
-        fail_msg: >-
-          The kernel booted with the ramoops parameters but the backend did not
-          register. Check `journalctl -b 0 -k | grep -i ramoops` -- a region
-          that is too small or a name mismatch fails quietly here.
+    # This replaces an assertion that keyed off a dmesg string and a variable
+    # that was never registered. It had never run, because it is gated on
+    # ramoops being armed and that only became true on 2026-11-09 -- at which
+    # point it errored out instead of reporting. Two lessons, both paid for:
+    # an assertion behind a condition that is never true is not a passing
+    # assertion, and the thing worth asserting is the kernel's verdict, not
+    # the configuration that was supposed to produce it.
+    #
+    # /sys/module/pstore/parameters/backend is that verdict, and unlike a
+    # dmesg string it cannot be evicted from the ring buffer by a message
+    # storm hours later.
+    - name: Read the live pstore backend
+      ansible.builtin.slurp:
+        src: /sys/module/pstore/parameters/backend
+      become: true
+      register: diag_pstore_live
+      failed_when: false
       tags: [diagnostics]
       when: diag_ramoops_armed | bool
 
-    # Not an assertion failure: the parameters are on disk and correct, and
-    # arming them needs a reboot that this playbook must never perform on a box
-    # that may be mid-training.
+    - name: ramoops is loaded AND actually won the pstore backend slot
+      ansible.builtin.assert:
+        that:
+          - "'ramoops' in diag_mods.stdout"
+          - diag_pstore_live.content is defined
+          - (diag_pstore_live.content | b64decode | trim) == diag_pstore_backend
+        fail_msg: >-
+          pstore's active backend is
+          '{{ diag_pstore_live.content | default('') | b64decode | trim }}',
+          not '{{ diag_pstore_backend }}'. pstore takes one backend and the
+          first to register wins, so ramoops is loaded but recording NOTHING
+          -- this is exactly the 2026-11-09 failure, where the module probe
+          returned -EBUSY while every configuration check passed. Check that
+          pstore.backend={{ diag_pstore_backend }} is on the kernel command
+          line and that the box has rebooted since.
+      tags: [diagnostics]
+      when: diag_ramoops_armed | bool
+
     - name: Say plainly that ramoops is configured but not yet armed
       ansible.builtin.debug:
         msg: >-

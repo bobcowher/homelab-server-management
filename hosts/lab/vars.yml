@@ -567,6 +567,22 @@ diag_ramoops_total: 24M
 diag_ramoops_console_size: 8388608
 diag_ramoops_record_size: 1048576
 
+# pstore takes ONE backend, and whoever registers first wins. On the boot of
+# 2026-11-09 that was efi_pstore, 1.5ms before ramoops tried:
+#
+#   pstore: Registered efi_pstore as persistent store backend
+#   pstore: backend 'efi_pstore' already in use: ignoring 'ramoops'
+#   ramoops: registering with pstore failed
+#   ramoops ramoops: probe with driver ramoops failed with error -16
+#
+# So the entire ramoops setup was dead while every configuration assertion
+# about it passed: the parameters were right, update-grub had run, the module
+# was loaded and the memory was reserved. It recorded nothing. This parameter
+# names the backend explicitly so efi_pstore cannot take the slot -- and
+# nothing is lost by displacing it, because efi_pstore only records on a panic
+# and these faults do not panic.
+diag_pstore_backend: ramoops
+
 diag_crash_capture_bin: /usr/local/sbin/lab-crash-capture
 diag_crash_watch_bin: /usr/local/sbin/lab-crash-watch
 
