@@ -21,7 +21,12 @@
 # what makes the rest of this line do anything. See vars.yml.
 GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT pstore.backend={{ diag_pstore_backend }} reserve_mem={{ diag_ramoops_total }}:4096:{{ diag_ramoops_region }} ramoops.mem_name={{ diag_ramoops_region }} ramoops.console_size={{ diag_ramoops_console_size }} ramoops.record_size={{ diag_ramoops_record_size }}"
 
-# Disables APST. This is an experiment against the leading suspect for the two
-# NVMe dropouts, not a setting anyone wants permanently -- see vars.yml, and
-# put diag_nvme_apst_max_latency_us back to 100000 to revert.
-GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT nvme_core.default_ps_max_latency_us={{ diag_nvme_apst_max_latency_us }}"
+# Two experiments against the NVMe dropouts, neither a setting anyone wants
+# permanently. See vars.yml for the evidence behind each.
+#
+# APST (default 100000) is already ELIMINATED -- the drive died sooner with it
+# off -- but it stays at 0 so only one variable changes at a time.
+#
+# HMB is the live experiment: max_host_mem_size_mb=0 disables the Host Memory
+# Buffer this DRAM-less drive was using when its controller raised CFS.
+GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT nvme_core.default_ps_max_latency_us={{ diag_nvme_apst_max_latency_us }} nvme.max_host_mem_size_mb={{ diag_nvme_hmb_max_mb }}"

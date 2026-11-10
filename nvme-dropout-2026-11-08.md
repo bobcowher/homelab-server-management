@@ -123,6 +123,24 @@ The same failure happened again 71 minutes after the 21:05 reboot. It was found 
 
 **What this changes:** the drive now fails under training load within about an hour, so lab can't hold an overnight queue. The next run should log the drive's temperature to a different machine every 30 seconds, so a failure shows whether heat came before it.
 
+## Third dropout, reproduced on purpose, 2026-11-09 18:21
+
+Boot 17:55, with `nvme_core.default_ps_max_latency_us=0` (APST off) and ramoops already on the command line. Two training runs on the 3090 from 18:08. The kernel log was captured from the desktop within seconds and saved to `~/lab-nvme-watch/kmsg-2026-11-09-182324.txt` on the desktop.
+
+| Uptime | Clock | Kernel |
+|---|---|---|
+| 1485 s | 18:19:45 | `NVRM: Xid (PCI:0000:0a:00): 32, pid=28942, name=python` on the 3090, from a training process |
+| 1563 s | 18:21:03 | `nvme nvme0: controller is down`, then a read fails with `sct 0x3 / sc 0x71`, a path error, not a media error |
+| 1691 s | 18:23:11 | `Device not ready`, `Disabling device after reset failure: -19`, then ext4 aborts the journal |
+
+- **The GPU faulted first.** Xid 32 (invalid or corrupted push buffer) came 78 s before the drive went down.
+- **Not a shared link.** The NVMe is behind root port `00:01.1` and the 3090 behind `00:03.1`. AER counters are 0 on both root ports, the drive and the 3090. Two devices on different ports failing within 78 s with no PCIe errors reported points to something upstream of both: power delivery (PSU or board), or the CPU's I/O die.
+- **APST is ruled out.** It was off for this failure.
+- **Time to failure:** 11 minutes under two runs at about 258 W on the 3090, against about 70 minutes with one run. More load, faster failure.
+- **Drive temperature isn't the trigger:** 51°C composite and 62°C sensor 2 at the last reading before the fault.
+
+Next tests, one at a time: cap the 3090's power, for example `nvidia-smi -i 1 -pl 200`, and repeat the same load. If it survives much longer, power delivery is the lead. Also try loading the GPU alone with no disk writes, and the disk alone with no GPU.
+
 ## Possible follow-ups, not done
 
 - Run `sudo smartctl -t long /dev/nvme0` while idle. No self-test has ever been logged.

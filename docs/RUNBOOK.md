@@ -1483,6 +1483,66 @@ Then after it comes back: `sudo ls /sys/fs/pstore/`. A `dmesg-ramoops-0` there i
 an idle box with no training running, and note `panic=0` means a **real** panic would hang lab
 until someone presses the button.
 
+#### 2026-11-09 18:21: the first captured dropout, and what it settles
+
+`lab-crash-watch` caught it 2 seconds after the kernel gave up. Raw capture:
+`docs/nvme-dropout-3-captured-2026-11-09.txt`. The kernel's own words:
+
+```
+[1563.149] nvme nvme0: controller is down; will reset: CSTS=0x3, PCI_STATUS=0x10
+[1563.161] nvme0n1: I/O Cmd(0x2) @ LBA 487261952, 8 blocks, I/O Error (sct 0x3 / sc 0x71)
+[1691.177] nvme nvme0: Device not ready; aborting reset, CSTS=0x3
+[1691.347] nvme nvme0: Disabling device after reset failure: -19
+```
+
+Read the registers, because they are the whole answer:
+
+- **`CSTS=0x3`** is `RDY|CFS`. Bit 1 is **Controller Fatal Status** — the controller reporting its
+  *own* internal fatal error. The drive killed itself.
+- **`PCI_STATUS=0x10`** is only the capabilities-list bit. **None** of the error bits are set: no
+  parity error, no target or master abort, no SERR. **The PCIe bus was clean.**
+- The kernel then spent **128 seconds** trying to reset it. It never came back ready.
+
+**What this eliminates:**
+
+| Theory | Verdict |
+|---|---|
+| Motherboard M.2 slot / traces / regulator | **Out.** The bus was clean and the device answered register reads at fault time. |
+| CPU PCIe root complex | **Out**, same evidence. |
+| Thermal | **Out.** Captured trace: 61 °C flat, peak 71 °C, against the drive's own 84.8 °C warning point. |
+| APST | **Out.** Disabled on this run; the drive died *sooner* — 16 min in, versus ~66 and ~74. |
+| Mains / circuit | **Out.** Dedicated 240 V line. |
+| RAM | **Out.** Same sticks ran clean on the previous Intel platform. |
+
+⚠️ **Correct an earlier reading.** Previous events showed the endpoint answering config reads with
+all-ones (`current_link_width=63`, speed `Unknown`), which was taken as evidence the device had
+fallen off the bus and pointed at the board. It is the opposite: that is a **consequence** of
+`Disabling device after reset failure` — once the kernel unbinds the device, reads return all-ones.
+The fault is upstream of it. A board/link theory was built on an artifact of the kernel giving up.
+
+**What is left is the drive's controller**, and the log already names the mechanism to suspect:
+
+```
+nvme nvme0: missing or invalid SUBNQN field.
+nvme nvme0: allocated 32 MiB host memory buffer (1 segment).
+nvme nvme0: Ignoring bogus Namespace Identifiers
+```
+
+This is a **DRAM-less** drive running a **Host Memory Buffer**, on firmware that already shows two
+quirks the kernel has to work around. HMB bugs are a known cause of controller fatal errors on
+DRAM-less drives. And the time-to-failure under load is **variable** — 16, 66, 74 minutes — which
+fits a firmware bug tripped by a particular I/O pattern, not anything cumulative like heat.
+
+**The experiment:** `nvme.max_host_mem_size_mb=0` (`diag_nvme_hmb_max_mb`) disables HMB. Reversible;
+128 is the default. If the drive still dies with HMB off, the controller is simply failing — replace
+it, and note that a DRAM-less QLC drive holding root *and* `/data` on a training box is the wrong
+part for the job regardless of this bug.
+
+**One early-warning signal, for free:** the thermal trace stops at 18:20:36 but the kernel did not
+log CFS until 18:21:18. Temperature comes from an admin command, so **the controller stopped
+answering admin commands ~37 seconds before the driver declared it dead.** A watcher that notices
+hwmon reads failing has a ~37 s head start on the fault.
+
 #### `/data` is still unbacked
 
 Two deaths in twenty hours on a single drive with no backup, and the first one silently truncated

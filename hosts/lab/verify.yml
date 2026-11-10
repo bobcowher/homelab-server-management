@@ -2398,12 +2398,23 @@
         that:
           - "'nvme_core.default_ps_max_latency_us=' ~ diag_nvme_apst_max_latency_us in diag_grub_text"
           - "'nvme_core.default_ps_max_latency_us=' ~ diag_nvme_apst_max_latency_us in diag_grubcfg_text"
+          - "'nvme.max_host_mem_size_mb=' ~ diag_nvme_hmb_max_mb in diag_grub_text"
+          - "'nvme.max_host_mem_size_mb=' ~ diag_nvme_hmb_max_mb in diag_grubcfg_text"
         fail_msg: >-
           The APST experiment is missing from the grub drop-in or has not been
           folded into /boot/grub/grub.cfg by update-grub.
       vars:
         diag_grub_text: "{{ diag_grub.content | b64decode }}"
         diag_grubcfg_text: "{{ diag_grubcfg.content | b64decode }}"
+      tags: [diagnostics]
+
+    - name: Report whether the HMB experiment is live on the running kernel
+      ansible.builtin.debug:
+        msg: >-
+          HMB on the running kernel:
+          {{ 'DISABLED (experiment live)'
+             if 'nvme.max_host_mem_size_mb=0' in (diag_cmdline.content | b64decode)
+             else 'still enabled -- the experiment arms on the next boot' }}
       tags: [diagnostics]
 
     - name: Report whether the APST experiment is live on the running kernel

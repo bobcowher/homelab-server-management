@@ -600,6 +600,40 @@ diag_ramoops_record_size: 1048576
 # and these faults do not panic.
 diag_pstore_backend: ramoops
 
+# HMB disabled as the leading experiment, replacing APST.
+#
+# The 2026-11-09 18:21 dropout was the first one captured, and the kernel's own
+# words settle most of the argument:
+#
+#   nvme nvme0: controller is down; will reset: CSTS=0x3, PCI_STATUS=0x10
+#   nvme nvme0: Device not ready; aborting reset, CSTS=0x3
+#   nvme nvme0: Disabling device after reset failure: -19
+#
+# CSTS=0x3 is RDY|CFS -- bit 1 is Controller Fatal Status, the controller
+# reporting its OWN internal fatal error. PCI_STATUS=0x10 is just the
+# capabilities-list bit: none of the error bits (parity, target/master abort,
+# SERR) are set, so the PCIe bus was CLEAN. The controller died internally on a
+# healthy link, and a 128-second reset attempt never brought it back ready.
+#
+# That eliminates the board/slot/link theories: the device was answering
+# register reads at fault time. The all-ones config reads seen on earlier
+# events were a CONSEQUENCE of "Disabling device after reset failure", not the
+# fault. Thermal is out too -- the captured trace shows 61C flat, 24C under the
+# drive's own 84.8C warning point. APST is out: it was disabled on this run and
+# the drive died sooner, 16 minutes in rather than ~70.
+#
+# What is left is the controller itself, and this drive is DRAM-less and was
+# running a 32 MiB Host Memory Buffer ("allocated 32 MiB host memory buffer"),
+# on firmware that already shows quirks in the log ("missing or invalid SUBNQN
+# field", "Ignoring bogus Namespace Identifiers"). HMB bugs are a known cause
+# of controller fatal errors on DRAM-less drives, and the variable time to
+# failure (16, 66, 74 minutes under load) fits a firmware bug hit by a
+# particular I/O pattern rather than anything cumulative.
+#
+# 0 disables HMB. Reversible: 128 is the default. If the drive still dies with
+# HMB off, the controller is simply failing and the drive should be replaced.
+diag_nvme_hmb_max_mb: 0
+
 diag_crash_capture_bin: /usr/local/sbin/lab-crash-capture
 diag_crash_watch_bin: /usr/local/sbin/lab-crash-watch
 
