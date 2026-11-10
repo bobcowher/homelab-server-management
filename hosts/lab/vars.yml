@@ -727,8 +727,15 @@ backup_sources:
   - /etc
   - /home/beekeeper/beekeeper/projects
 
-backup_schedule: "*-*-* 02:30:00"
-backup_check_schedule: "Sun *-*-* 04:00:00"
+# 23:00, NOT the small hours. lab powers itself off at 00:00 via
+# lab-idle-shutdown and does not auto-boot, so a 02:30 timer would fire on a
+# machine that is reliably switched off -- Persistent=true would then defer
+# every backup to the next boot, competing with whatever Robert booted to do.
+# 23:00 runs while the box is still up on any evening it was used, and
+# Persistent still covers the days it was not.
+backup_schedule: "*-*-* 23:00:00"
+# Sunday 22:00, for the same reason -- before the nightly power-off, not after.
+backup_check_schedule: "Sun *-*-* 22:00:00"
 
 # A full --read-data over ~300GB on a 7200rpm disk takes hours. A rotating
 # subset covers the whole repository over several weeks and never blocks the
