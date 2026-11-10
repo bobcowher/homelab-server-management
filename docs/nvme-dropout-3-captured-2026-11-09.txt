@@ -1,3 +1,6 @@
+# MAC addresses in this capture were replaced with xx:xx:xx:xx:xx:xx before
+# publishing: this repository is public and they identify the machine, while
+# having no bearing on the fault documented here. Nothing else is altered.
 lab-crash-watch FIRED 2026-11-09 18:23:23
 reason-bits: 7 (1=emergency_ro 2=nvme not live 4=size 0)
 
@@ -2316,7 +2319,7 @@ Writeback:             0 kB
  DEVICE=+pci:0000:06:00.1
 6,1055,1672750,-;igb: Intel(R) Gigabit Ethernet Network Driver
 6,1056,1672753,-;igb: Copyright (c) 2007-2014 Intel Corporation.
-6,1057,1679582,-;r8169 0000:06:00.1 eth0: RTL8168fp/RTL8117, 24:4b:fe:df:7f:9d, XID 54a, IRQ 62
+6,1057,1679582,-;r8169 0000:06:00.1 eth0: RTL8168fp/RTL8117, xx:xx:xx:xx:xx:xx, XID 54a, IRQ 62
  SUBSYSTEM=pci
  DEVICE=+pci:0000:06:00.1
 6,1058,1679587,-;r8169 0000:06:00.1 eth0: jumbo features [frames: 9194 bytes, tx checksumming: ko]
@@ -2395,7 +2398,7 @@ Writeback:             0 kB
 6,1087,1878133,-;igb 0000:05:00.0: Intel(R) Gigabit Ethernet Network Connection
  SUBSYSTEM=pci
  DEVICE=+pci:0000:05:00.0
-6,1088,1878137,-;igb 0000:05:00.0: eth0: (PCIe:2.5Gb/s:Width x1) 24:4b:fe:df:7f:9c
+6,1088,1878137,-;igb 0000:05:00.0: eth0: (PCIe:2.5Gb/s:Width x1) xx:xx:xx:xx:xx:xx
  SUBSYSTEM=pci
  DEVICE=+pci:0000:05:00.0
 6,1089,1878140,-;igb 0000:05:00.0: eth0: PBA No: FFFFFF-0FF
@@ -2741,12 +2744,12 @@ Writeback:             0 kB
 6,1337,14205797,-;eth0: renamed from veth937a424
 6,1338,14206250,-;br-59f5e162cbf4: port 5(veth0b6207d) entered blocking state
 6,1339,14206256,-;br-59f5e162cbf4: port 5(veth0b6207d) entered forwarding state
-4,1340,16886770,-;[UFW BLOCK] IN=br-59f5e162cbf4 OUT= MAC=42:d8:30:05:33:16:ca:c1:74:dc:9e:f9:08:00 SRC=172.18.0.5 DST=172.17.0.1 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=10727 DF PROTO=TCP SPT=48816 DPT=11434 WINDOW=64240 RES=0x00 SYN URGP=0 
-4,1341,16886784,-;[UFW BLOCK] IN=br-59f5e162cbf4 OUT= MAC=42:d8:30:05:33:16:ca:c1:74:dc:9e:f9:08:00 SRC=172.18.0.5 DST=172.17.0.1 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=25858 DF PROTO=TCP SPT=36552 DPT=12434 WINDOW=64240 RES=0x00 SYN URGP=0 
+4,1340,16886770,-;[UFW BLOCK] IN=br-59f5e162cbf4 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=172.18.0.5 DST=172.17.0.1 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=10727 DF PROTO=TCP SPT=48816 DPT=11434 WINDOW=64240 RES=0x00 SYN URGP=0 
+4,1341,16886784,-;[UFW BLOCK] IN=br-59f5e162cbf4 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=172.18.0.5 DST=172.17.0.1 LEN=60 TOS=0x00 PREC=0x00 TTL=64 ID=25858 DF PROTO=TCP SPT=36552 DPT=12434 WINDOW=64240 RES=0x00 SYN URGP=0 
 6,1342,17189137,-;/proc/cgroups lists only v1 controllers, use cgroup.controllers of root cgroup for v2 info
 44,1343,34140845,-;systemd-journald[883]: File /var/log/journal/080a5e3704df4af0a23dcf8cd7fa4282/user-1000.journal corrupted or uncleanly shut down, renaming and replacing.
-4,1344,119702084,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=32328 DF PROTO=2 
-4,1345,171392850,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=24:4b:fe:df:7f:9c:94:18:65:7c:7d:c5:08:00 SRC=3.171.171.104 DST=192.168.1.30 LEN=76 TOS=0x00 PREC=0x00 TTL=246 ID=63083 PROTO=TCP SPT=443 DPT=48498 WINDOW=133 RES=0x00 ACK PSH URGP=0 
+4,1344,119702084,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=32328 DF PROTO=2 
+4,1345,171392850,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=3.171.171.104 DST=192.168.1.30 LEN=76 TOS=0x00 PREC=0x00 TTL=246 ID=63083 PROTO=TCP SPT=443 DPT=48498 WINDOW=133 RES=0x00 ACK PSH URGP=0 
 6,1346,233732012,-;docker0: port 1(veth88d63b7) entered blocking state
 6,1347,233732017,-;docker0: port 1(veth88d63b7) entered disabled state
 6,1348,233732025,-;veth88d63b7: entered allmulticast mode
@@ -2760,7 +2763,7 @@ Writeback:             0 kB
 6,1356,233887109,-;veth88d63b7 (unregistering): left allmulticast mode
 6,1357,233887114,-;veth88d63b7 (unregistering): left promiscuous mode
 6,1358,233887119,-;docker0: port 1(veth88d63b7) entered disabled state
-4,1359,244703799,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=19559 DF PROTO=2 
+4,1359,244703799,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=19559 DF PROTO=2 
 6,1360,264708373,-;docker0: port 1(veth144360d) entered blocking state
 6,1361,264708378,-;docker0: port 1(veth144360d) entered disabled state
 6,1362,264708386,-;veth144360d: entered allmulticast mode
@@ -2788,7 +2791,7 @@ Writeback:             0 kB
 6,1384,336660529,-;veth084d61a (unregistering): left allmulticast mode
 6,1385,336660535,-;veth084d61a (unregistering): left promiscuous mode
 6,1386,336660540,-;docker0: port 1(veth084d61a) entered disabled state
-4,1387,369706455,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=4777 DF PROTO=2 
+4,1387,369706455,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=4777 DF PROTO=2 
 6,1388,370227111,-;docker0: port 1(vethb22df53) entered blocking state
 6,1389,370227117,-;docker0: port 1(vethb22df53) entered disabled state
 6,1390,370227124,-;vethb22df53: entered allmulticast mode
@@ -2828,7 +2831,7 @@ Writeback:             0 kB
 6,1424,476550836,-;vethae8d28d (unregistering): left allmulticast mode
 6,1425,476550843,-;vethae8d28d (unregistering): left promiscuous mode
 6,1426,476550855,-;docker0: port 1(vethae8d28d) entered disabled state
-4,1427,494706214,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=16543 DF PROTO=2 
+4,1427,494706214,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=16543 DF PROTO=2 
 6,1428,513731065,-;docker0: port 1(veth661346c) entered blocking state
 6,1429,513731071,-;docker0: port 1(veth661346c) entered disabled state
 6,1430,513731078,-;veth661346c: entered allmulticast mode
@@ -2842,26 +2845,26 @@ Writeback:             0 kB
 6,1438,513891847,-;veth661346c (unregistering): left allmulticast mode
 6,1439,513891853,-;veth661346c (unregistering): left promiscuous mode
 6,1440,513891857,-;docker0: port 1(veth661346c) entered disabled state
-4,1441,619709520,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=61391 DF PROTO=2 
-4,1442,657798656,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=33:33:00:00:00:01:8c:e9:ee:50:dc:e1:86:dd SRC=fe80:0000:0000:0000:9b80:7d8a:4e46:d930 DST=ff02:0000:0000:0000:0000:0000:0000:0001 LEN=89 TC=0 HOPLIMIT=1 FLOWLBL=131522 PROTO=UDP SPT=27036 DPT=27036 LEN=49 
-4,1443,659821107,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=33:33:00:00:00:01:8c:e9:ee:50:dc:e1:86:dd SRC=fe80:0000:0000:0000:9b80:7d8a:4e46:d930 DST=ff02:0000:0000:0000:0000:0000:0000:0001 LEN=187 TC=0 HOPLIMIT=1 FLOWLBL=131522 PROTO=UDP SPT=27036 DPT=27036 LEN=147 
-4,1444,744712722,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=30589 DF PROTO=2 
-4,1445,869713480,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=3751 DF PROTO=2 
-4,1446,994713795,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=10468 DF PROTO=2 
-4,1447,1119716271,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=34925 DF PROTO=2 
-4,1448,1244718652,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=40868 DF PROTO=2 
-4,1449,1369720087,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=31060 DF PROTO=2 
+4,1441,619709520,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=61391 DF PROTO=2 
+4,1442,657798656,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:86:dd SRC=fe80:0000:0000:0000:9b80:7d8a:4e46:d930 DST=ff02:0000:0000:0000:0000:0000:0000:0001 LEN=89 TC=0 HOPLIMIT=1 FLOWLBL=131522 PROTO=UDP SPT=27036 DPT=27036 LEN=49 
+4,1443,659821107,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:86:dd SRC=fe80:0000:0000:0000:9b80:7d8a:4e46:d930 DST=ff02:0000:0000:0000:0000:0000:0000:0001 LEN=187 TC=0 HOPLIMIT=1 FLOWLBL=131522 PROTO=UDP SPT=27036 DPT=27036 LEN=147 
+4,1444,744712722,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=30589 DF PROTO=2 
+4,1445,869713480,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=3751 DF PROTO=2 
+4,1446,994713795,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=10468 DF PROTO=2 
+4,1447,1119716271,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=34925 DF PROTO=2 
+4,1448,1244718652,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=40868 DF PROTO=2 
+4,1449,1369720087,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=31060 DF PROTO=2 
 4,1450,1485238190,c;NVRM: GPU at PCI:0000:0a:00: GPU-5d9389a6-ceae-3af0-e892-004261e10212
 4,1451,1485238197,c;NVRM: GPU Board Serial Number: 1654421004969
 4,1452,1485238199,c;NVRM: Xid (PCI:0000:0a:00): 32, pid=28942, name=python, channel 0x00000008 intr 00800000
 4,1453,1485240608,c;NVRM: Xid (PCI:0000:0a:00): 32, pid=28942, name=python, channel 0x00000008 intr 00800000
-4,1454,1494720394,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=51194 DF PROTO=2 
+4,1454,1494720394,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=51194 DF PROTO=2 
 4,1455,1563148971,-;nvme nvme0: controller is down; will reset: CSTS=0x3, PCI_STATUS=0x10
  SUBSYSTEM=nvme
  DEVICE=c240:0
 3,1456,1563161134,-;nvme0n1: I/O Cmd(0x2) @ LBA 487261952, 8 blocks, I/O Error (sct 0x3 / sc 0x71) 
 3,1457,1563161146,-;I/O error, dev nvme0n1, sector 487261952 op 0x0:(READ) flags 0x80700 phys_seg 1 prio class 2
-4,1458,1619722903,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=01:00:5e:00:00:01:94:18:65:7c:7d:c5:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=54215 DF PROTO=2 
+4,1458,1619722903,-;[UFW BLOCK] IN=enp5s0 OUT= MAC=xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:08:00 SRC=192.168.1.1 DST=224.0.0.1 LEN=36 TOS=0x00 PREC=0x00 TTL=1 ID=54215 DF PROTO=2 
 3,1459,1691177225,-;nvme nvme0: Device not ready; aborting reset, CSTS=0x3
  SUBSYSTEM=nvme
  DEVICE=c240:0
