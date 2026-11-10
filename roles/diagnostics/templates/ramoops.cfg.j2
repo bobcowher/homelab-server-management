@@ -10,11 +10,11 @@
 # and ramoops.mem_name finds it by that name. The pair exists so this does not
 # have to hardcode a physical address that a BIOS update could invalidate.
 #
-# console_size is why this is configured rather than left at ramoops defaults.
-# The dmesg records are only written on an oops or a panic, and the failure
-# this was built for -- 2026-11-08, the only NVMe going state=dead while the
-# box stayed up -- never panicked. console_size makes ramoops a console and
-# records continuously, so the nvme timeouts land in RAM as they are printed.
+# console_size is 0 and must stay 0 on this kernel: Ubuntu builds without
+# CONFIG_PSTORE_CONSOLE, so the parameter is accepted, the memory is reserved,
+# and no console is ever registered. ramoops therefore records on an oops or
+# panic ONLY, which does NOT cover the NVMe dropout -- that never panics.
+# lab-crash-watch covers that. See vars.yml.
 # pstore.backend is NOT optional here. pstore accepts one backend and the
 # first to register wins; on 2026-11-09 efi_pstore won and ramoops failed with
 # -EBUSY while every configuration check still passed. Naming the backend is

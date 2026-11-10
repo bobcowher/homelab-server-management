@@ -557,14 +557,31 @@ sonarqube_scanner_root: /opt/sonar-scanner
 # reserve_mem names the region on the kernel command line and ramoops.mem_name
 # finds it by that name, which avoids hardcoding a physical address.
 diag_ramoops_region: oops
-diag_ramoops_total: 24M
+# 8M, down from 24M: with no console zone (see below) this only holds dmesg
+# records, and a full panic record measured 110KB.
+diag_ramoops_total: 8M
 
-# console_size is the load-bearing one, and the reason a default ramoops setup
-# would NOT have caught 2026-11-08. The dmesg records (record_size) are only
-# written on an oops or a panic. console_size makes ramoops a console and
-# records continuously, which is what captures nvme timeouts on a box that
-# never panicked.
-diag_ramoops_console_size: 8388608
+# console_size is set to 0 because IT CANNOT WORK ON THIS KERNEL, and the
+# claim that used to sit here -- that it was the load-bearing setting -- was
+# simply wrong. Ubuntu's 7.0.0-31-generic is built without
+# CONFIG_PSTORE_CONSOLE:
+#
+#   $ grep -E '^CONFIG_PSTORE' /boot/config-$(uname -r)
+#   CONFIG_PSTORE=y  CONFIG_PSTORE_RAM=m  CONFIG_PSTORE_ZONE=m  ... and no
+#   CONFIG_PSTORE_CONSOLE, CONFIG_PSTORE_PMSG or CONFIG_PSTORE_FTRACE
+#
+# The parameter is accepted silently, the memory is carved out, and no console
+# is ever registered -- /proc/consoles lists only tty0. So 8MB was being
+# reserved for nothing.
+#
+# What that leaves: ramoops writes dmesg records on an OOPS OR PANIC ONLY.
+# Proven working on 2026-11-09 by `echo c > /proc/sysrq-trigger`, which
+# produced a 110KB dmesg-ramoops-0 with the full call trace. But the NVMe
+# dropout DOES NOT PANIC -- root is mounted errors=continue, so a dead disk
+# becomes emergency_ro and the kernel carries on. **ramoops will not capture
+# the fault this box actually has.** It is worth keeping for a real panic or
+# lockup, and lab-crash-watch is what covers the dropout.
+diag_ramoops_console_size: 0
 diag_ramoops_record_size: 1048576
 
 # pstore takes ONE backend, and whoever registers first wins. On the boot of

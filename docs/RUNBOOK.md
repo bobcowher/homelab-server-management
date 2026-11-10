@@ -1390,6 +1390,99 @@ reachable**: capture first, warm reset, read `/sys/fs/pstore`, and only then pul
 warm reset leaves it dark, pull power — a drive that will not initialise is worth more than a
 ring buffer.
 
+#### The ramoops setup was dead for a day and every check was green
+
+Worth reading before trusting any instrumentation in this repo.
+
+`pstore` accepts **one** backend and the first to register wins. On the 11-09 boot:
+
+```
+[    4.810378] pstore: Registered efi_pstore as persistent store backend
+[    4.812093] pstore: backend 'efi_pstore' already in use: ignoring 'ramoops'
+[    4.812095] ramoops: registering with pstore failed
+[    4.812232] ramoops ramoops: probe with driver ramoops failed with error -16
+```
+
+`efi_pstore` beat ramoops by 1.7 ms. The grub parameters were correct, `update-grub` had run, the
+module was loaded, the 24 MB was reserved — and ramoops would have recorded **nothing**, forever.
+The fix is `pstore.backend=ramoops` on the kernel command line, which costs nothing: `efi_pstore`
+only records on a panic, and these faults do not panic.
+
+Check the kernel's verdict, never the configuration:
+
+```bash
+cat /sys/module/pstore/parameters/backend    # must say: ramoops
+sudo dmesg | grep -iE 'ramoops|pstore'       # must say: Registered ramoops as ...
+```
+
+Prefer the sysfs file. A dmesg string can be evicted from the ring buffer by a message storm hours
+later, and this box produces exactly such a storm when root goes read-only.
+
+#### Two ways an assertion can silently not exist
+
+Both of these were live in this repo and both hid the failure above.
+
+**Gated on a condition that was never true.** The ramoops runtime check was `when:
+diag_ramoops_armed | bool`, and nothing was armed until 11-09. It referenced `diag_kmsg`, a
+variable no task ever registered. It sat there looking like coverage for a day, and the first time
+it ran it errored rather than reported. **A green run tells you nothing about assertions that were
+skipped.** Read the `skipped=` count in the recap, not just `failed=`.
+
+**Missing its tag.** Its replacement had no `tags: [diagnostics]`, so `--tags diagnostics`
+filtered it out and the run reported `failed=0` with the backend still wrong. An untagged task in a
+tagged play does not fail — it disappears. Every task in `hosts/lab/verify.yml` must carry a tag;
+this one-liner finds any that do not:
+
+```bash
+python3 -c "
+import yaml
+for p in yaml.safe_load(open('hosts/lab/verify.yml')):
+    if p.get('hosts') == 'lab':
+        print([t.get('name') for t in p.get('tasks', []) if 'tags' not in t])"
+```
+
+#### What ramoops can and cannot capture here
+
+Proven on 2026-11-09, and the limit matters more than the capability.
+
+**It captures a panic.** `echo c > /proc/sysrq-trigger` produced a 110 KB `dmesg-ramoops-0` with
+the full call trace, harvested by `systemd-pstore` into `/var/lib/systemd/pstore/`. The chain
+works end to end across a warm reboot on this board.
+
+**It will NOT capture the NVMe dropout.** ramoops writes dmesg records on an **oops or panic
+only**, and the dropout does neither: root is mounted `errors=continue`, so a dead disk becomes
+`emergency_ro` and the kernel carries on. The continuous-logging mode that would cover it does not
+exist on this kernel — Ubuntu builds without `CONFIG_PSTORE_CONSOLE`:
+
+```bash
+grep -E '^CONFIG_PSTORE' /boot/config-$(uname -r)   # no CONFIG_PSTORE_CONSOLE
+cat /proc/consoles                                  # tty0 only -- no pstore
+```
+
+`ramoops.console_size` is accepted silently, reserves the memory, and registers nothing. It was set
+to 8 MB for a day on the belief that it was the load-bearing setting. It is now `0`.
+
+So: **`lab-crash-watch` is the thing that covers the actual fault**, and ramoops is the backup for a
+real panic or lockup. Do not reverse those in your head.
+
+#### Proving ramoops actually captures
+
+Configuration being right is not evidence, as above. The test is a deliberate panic, and it needs
+two runtime changes first — **neither persists across a reboot**:
+
+```bash
+cat /proc/sys/kernel/sysrq     # 176 on this box: lacks bit 8, so `echo c` is IGNORED
+cat /proc/sys/kernel/panic     # 0 on this box: the panic HANGS and needs the power button
+
+sudo bash -c 'echo 10 > /proc/sys/kernel/panic'   # auto-reboot, and warm, so ramoops survives
+sudo bash -c 'echo 1  > /proc/sys/kernel/sysrq'
+sudo bash -c 'echo c  > /proc/sysrq-trigger'      # panics immediately
+```
+
+Then after it comes back: `sudo ls /sys/fs/pstore/`. A `dmesg-ramoops-0` there is proof. Do this on
+an idle box with no training running, and note `panic=0` means a **real** panic would hang lab
+until someone presses the button.
+
 #### `/data` is still unbacked
 
 Two deaths in twenty hours on a single drive with no backup, and the first one silently truncated

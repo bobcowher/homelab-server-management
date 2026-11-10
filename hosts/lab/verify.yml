@@ -2252,6 +2252,48 @@
       tags: [diagnostics]
       when: diag_ramoops_armed | bool
 
+    # Guards a whole class of bug: configuring a capability the kernel does not
+    # have. ramoops.console_size was set to 8MB for a day on the belief that it
+    # made ramoops log continuously, which is what a non-panicking fault needs.
+    # Ubuntu builds without CONFIG_PSTORE_CONSOLE, so the parameter was
+    # accepted, 8MB was reserved, and no console was ever registered. Nothing
+    # complained. A kernel parameter being present is not the same as it doing
+    # anything, so assert the capability, not the setting.
+    - name: Read the kernel build config for pstore
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -E '^CONFIG_PSTORE_CONSOLE=' "/boot/config-$(uname -r)" || echo ABSENT
+      args:
+        executable: /bin/bash
+      register: diag_pstore_console_cfg
+      changed_when: false
+      failed_when: false
+      tags: [diagnostics]
+
+    - name: Read the registered consoles
+      ansible.builtin.slurp:
+        src: /proc/consoles
+      register: diag_consoles
+      tags: [diagnostics]
+
+    - name: ramoops console logging is either supported or switched off
+      ansible.builtin.assert:
+        that:
+          - >-
+            (diag_ramoops_console_size | int) == 0
+            or ('CONFIG_PSTORE_CONSOLE=y' in diag_pstore_console_cfg.stdout
+                and 'pstore' in (diag_consoles.content | b64decode))
+        fail_msg: >-
+          diag_ramoops_console_size is {{ diag_ramoops_console_size }} but this
+          kernel cannot do it: CONFIG_PSTORE_CONSOLE is
+          '{{ diag_pstore_console_cfg.stdout | trim }}' and /proc/consoles
+          lists only
+          {{ (diag_consoles.content | b64decode).split() | select('match','^[a-z]') | list | first | default('?') }}.
+          The parameter would be accepted silently and reserve memory for a
+          console that is never registered. Set it to 0, and rely on
+          lab-crash-watch for faults that do not panic.
+      tags: [diagnostics]
+
     - name: Say plainly that ramoops is configured but not yet armed
       ansible.builtin.debug:
         msg: >-
