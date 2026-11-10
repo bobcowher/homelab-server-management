@@ -167,6 +167,12 @@ llama_models:
     # value Hugging Face reports, so this uses the local file rather than
     # re-pulling 19GB. New models should prefer `hf:`.
     file: Laguna-XS-2.1-Q4_K_M.gguf
+    # Upstream, so a rebuild can re-fetch rather than guess. Not consumed by
+    # the role -- it is the record. verify.yml requires it on every `file:`
+    # entry, because /data/models is EXCLUDED from backups on the strength of
+    # these weights being re-downloadable. If that is not true, the exclusion
+    # is wrong. Published size 20.3GB matches the local 20,274,300,032 bytes.
+    hf_repo: poolside/Laguna-XS-2.1-GGUF
     gpus: all              # both cards; 19GB of weights fit with room for KV
     ctx: 65536
     threads: 16
@@ -185,6 +191,7 @@ llama_models:
   # bytes per token than Laguna's Q4_K_M, which is the trade for the quality.
   - name: qwen3-coder
     file: Qwen3-Coder-30B-A3B-Instruct-Q6_K.gguf
+    hf_repo: Qwen/Qwen3-Coder-30B-A3B-Instruct-GGUF
     gpus: all
     ctx: 65536
     threads: 16
@@ -209,6 +216,7 @@ llama_models:
   # 6.5GB weights + 0.2GB vision projector leaves ~4.5GB for KV at 32k ctx.
   - name: gemma-4-12b
     file: gemma-4-12b-it-qat-q4_0.gguf
+    hf_repo: google/gemma-4-12B-it-qat-q4_0-gguf
     mmproj: mmproj-gemma-4-12b-it-qat-q4_0.gguf   # image + audio input
     gpus: "device=0"       # the 3060
     ctx: 32768

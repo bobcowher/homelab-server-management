@@ -2081,6 +2081,27 @@
       tags: [power]
 
 
+    # Every hand-placed model must record where it came from. This is not
+    # bookkeeping: /data/models is EXCLUDED from backups specifically because
+    # these weights are re-downloadable, and that exclusion is only safe while
+    # the upstream is written down. On 2026-11-09 none of the three were, and
+    # the only reason the Laguna source was recoverable was a web search.
+    - name: Every local model records its upstream repo
+      ansible.builtin.assert:
+        that:
+          - item.hf_repo is defined
+          - item.hf_repo | length > 0
+        fail_msg: >-
+          llama_models entry '{{ item.name }}' uses a local file
+          ({{ item.file | default('?') }}) but records no hf_repo. /data/models
+          is excluded from backups on the assumption these can be re-fetched,
+          so an unrecorded source means that model exists in exactly one place
+          -- on the drive that has dropped out three times.
+      loop: "{{ llama_models | selectattr('file', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      tags: [llm, models]
+
     # --- diagnostics -------------------------------------------------------
     #
     # These assertions prove the crash-capture plumbing is CONFIGURED. They

@@ -211,11 +211,23 @@ Add an entry to `llama_models` in `hosts/lab/vars.yml`. `${PORT}` is llama-swap'
 ```yaml
   - name: my-model
     file: my-model-q6_k.gguf     # fetched by scripts/fetch_model.sh
+    hf_repo: org/my-model-GGUF   # REQUIRED -- see below
     gpus: all                    # all | device=0 (3060) | device=1 (3090)
     ctx: 65536
     threads: 16
     args: "--jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0"
 ```
+
+> ⚠️ **`hf_repo` is mandatory on any `file:` model, and `verify.yml` enforces it.**
+> `/data/models` (49 GB) is **excluded from backups** precisely because these weights are
+> re-downloadable — and that exclusion is only safe while the upstream is written down. On
+> 2026-11-09 all three models were hand-placed with no recorded source, and recovering
+> `Laguna-XS-2.1-Q4_K_M.gguf`'s origin (`poolside/Laguna-XS-2.1-GGUF`) took a web search. A model
+> with no `hf_repo` exists in exactly one place: the drive that has dropped out three times.
+>
+> Nothing in Ansible fetches these. `scripts/fetch_model.sh` is a manual step, no task calls it,
+> every declared model uses `file:` rather than `hf:`, and `hf-cache/` is empty. "Rebuildable from
+> code" is therefore only true for models whose source is recorded here.
 
 For an always-on model on the 3060, add `group: resident` and `ttl: 0`. A multimodal model also takes `mmproj: <projector>.gguf`, which becomes `--mmproj`.
 
