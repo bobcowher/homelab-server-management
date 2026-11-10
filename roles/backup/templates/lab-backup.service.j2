@@ -1,0 +1,21 @@
+[Unit]
+Description=restic backup of {{ backup_sources | join(' ') }} to {{ backup_repo }}
+Documentation=file://{{ backup_script }}
+# The repo is on a removable disk. Without this the unit can run before the
+# mount exists, and the script's own guard would have to catch it every time.
+RequiresMountsFor={{ backup_mount }}
+After={{ backup_mount | regex_replace('^/', '') | regex_replace('/', '-') }}.mount
+
+[Service]
+Type=oneshot
+ExecStart={{ backup_script }}
+User=root
+# Backups must never win a fight with a training run for CPU or disk.
+Nice=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+# It reads /data and writes only to the backup mount.
+ProtectSystem=strict
+ReadWritePaths={{ backup_mount }}
+ReadOnlyPaths=/data
+PrivateTmp=true

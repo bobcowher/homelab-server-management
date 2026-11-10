@@ -1,0 +1,34 @@
+#!/bin/bash
+# Managed by Ansible. Verifies the repository rather than assuming it.
+#
+# An unverified backup is a story, not a backup -- and this one lives on a used
+# drive, written by a machine whose NVMe silently truncated 55 of 197 files
+# while rsync reported success. `restic check` validates structure;
+# --read-data-subset actually reads and re-hashes a slice of the real data,
+# which is the only thing that catches bit rot.
+set -uo pipefail
+
+export RESTIC_REPOSITORY={{ backup_repo }}
+export RESTIC_PASSWORD_FILE={{ backup_password_file }}
+
+log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+
+if ! findmnt -no TARGET {{ backup_mount }} >/dev/null 2>&1; then
+    log "FATAL: {{ backup_mount }} is not mounted; refusing to run"
+    exit 1
+fi
+
+log "structural check"
+restic check 2>&1 | sed 's/^/  /'
+rc=${PIPESTATUS[0]}
+[ "$rc" -eq 0 ] || { log "FATAL: restic check exited $rc"; exit "$rc"; }
+
+# A full --read-data over ~300GB on a 7200rpm disk takes hours. A rotating
+# subset covers the whole repository over time without ever blocking the box
+# for a night. {{ backup_check_subset }} per run.
+log "reading and re-hashing {{ backup_check_subset }} of the data"
+restic check --read-data-subset={{ backup_check_subset }} 2>&1 | sed 's/^/  /'
+rc=${PIPESTATUS[0]}
+[ "$rc" -eq 0 ] || { log "FATAL: restic check --read-data-subset exited $rc"; exit "$rc"; }
+
+log "verification passed"

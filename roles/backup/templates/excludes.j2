@@ -1,0 +1,33 @@
+# Managed by Ansible. Paths restic will NOT back up.
+#
+# Every line here is a claim that the data is reproducible. If that stops being
+# true, the exclusion is a data-loss bug, not a space saving.
+
+# Model weights, 49GB. Excluded because every entry in llama_models records an
+# hf_repo and can be re-fetched with scripts/fetch_model.sh. verify.yml
+# ENFORCES that, which is what makes this line safe.
+{{ data_root }}/models
+
+# llama.cpp's own download cache -- reproducible by definition.
+{{ llama_cache_dir }}
+
+# Caches and build artefacts: large, churning, and regenerated on demand.
+**/__pycache__
+**/.pytest_cache
+**/.compile_cache
+**/.locks
+**/*.pyc
+**/node_modules
+**/.cache/huggingface
+**/.cache/pip
+**/.cache/torch
+
+# Python virtualenvs are rebuilt from requirements, and they are both large and
+# full of files that change every install.
+**/venv
+**/.venv
+
+# Transient
+**/tmp
+**/*.tmp
+**/*.part

@@ -2476,6 +2476,173 @@
           -- configured value is {{ diag_nvme_apst_max_latency_us }}
       tags: [diagnostics]
 
+    # --- backups ------------------------------------------------------------
+    #
+    # These prove the backup path is CONFIGURED and that the repository is
+    # readable. The only thing that proves a backup is RESTORABLE is a restore,
+    # and the scheduled `restic check --read-data-subset` is what approximates
+    # it continuously. Do not read a green run here as "the data is safe".
+    - name: Stat the backup disk by its stable id
+      ansible.builtin.stat:
+        path: "{{ backup_disk_by_id }}"
+      register: vrf_backup_disk
+      tags: [backup]
+
+    - name: The backup disk is present under its serial-bearing by-id path
+      ansible.builtin.assert:
+        that:
+          - vrf_backup_disk.stat.exists
+        fail_msg: >-
+          {{ backup_disk_by_id }} is missing. Either the disk is gone or it was
+          referenced by a name that moved.
+      tags: [backup]
+
+    - name: Read the mount table
+      ansible.builtin.slurp:
+        src: /proc/mounts
+      register: vrf_mounts
+      tags: [backup]
+
+    - name: Read fstab
+      ansible.builtin.slurp:
+        src: /etc/fstab
+      register: vrf_fstab_raw
+      tags: [backup]
+
+    - name: The backup volume is mounted, and mounted nofail
+      ansible.builtin.assert:
+        that:
+          - backup_mount ~ ' ext4' in (vrf_mounts.content | b64decode)
+          - "'nofail' in (vrf_fstab.content | b64decode)"
+        fail_msg: >-
+          {{ backup_mount }} is not mounted as ext4, or fstab lacks nofail.
+          nofail matters: without it a dead or unplugged backup disk drops the
+          box to an emergency shell at boot, turning a degraded backup into an
+          outage.
+      vars:
+        vrf_fstab: "{{ vrf_fstab_raw }}"
+      tags: [backup]
+
+    - name: Stat the repository config and the password file
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      become: true
+      register: vrf_backup_files
+      loop:
+        - "{{ backup_repo }}/config"
+        - "{{ backup_password_file }}"
+      tags: [backup]
+
+    - name: The repository exists and its password is root-only
+      ansible.builtin.assert:
+        that:
+          - vrf_backup_files.results[0].stat.exists
+          - vrf_backup_files.results[1].stat.exists
+          - vrf_backup_files.results[1].stat.mode == '0600'
+          - vrf_backup_files.results[1].stat.pw_name == 'root'
+        fail_msg: >-
+          Missing {{ backup_repo }}/config or a badly-permissioned
+          {{ backup_password_file }}. That file is the ONLY thing that can
+          decrypt these snapshots and it is deliberately not in git -- this
+          repository is public.
+      tags: [backup]
+
+    # The functional check: listing snapshots requires the repository, the
+    # password file and restic to all agree. It is the cheapest thing that
+    # fails if any of the three drifts.
+    - name: List snapshots in the repository
+      ansible.builtin.command:
+        cmd: restic --repo {{ backup_repo }} snapshots --json
+      become: true
+      environment:
+        RESTIC_PASSWORD_FILE: "{{ backup_password_file }}"
+      register: vrf_restic_snapshots
+      changed_when: false
+      failed_when: false
+      tags: [backup]
+
+    - name: The repository is readable with the stored password
+      ansible.builtin.assert:
+        that:
+          - vrf_restic_snapshots.rc == 0
+        fail_msg: >-
+          `restic snapshots` failed (rc={{ vrf_restic_snapshots.rc }}):
+          {{ vrf_restic_snapshots.stderr | default('') | truncate(200) }}
+          The repository, the password file and restic do not agree.
+      tags: [backup]
+
+    - name: Report how many snapshots exist
+      ansible.builtin.debug:
+        msg: >-
+          {{ (vrf_restic_snapshots.stdout | from_json | length) }} snapshot(s)
+          in {{ backup_repo }}
+          {{ '-- NONE YET, so nothing is protected until the first run'
+             if (vrf_restic_snapshots.stdout | from_json | length) == 0 else '' }}
+      tags: [backup]
+
+    - name: Read the exclude list
+      ansible.builtin.slurp:
+        src: "{{ backup_exclude_file }}"
+      become: true
+      register: vrf_excludes
+      tags: [backup]
+
+    # /data/models is excluded only because every model records an hf_repo and
+    # can be re-fetched. That assertion lives above, tagged [models]; this one
+    # checks the other half of the bargain is actually in place.
+    - name: The exclude list drops the re-fetchable model weights
+      ansible.builtin.assert:
+        that:
+          - data_root ~ '/models' in (vrf_excludes.content | b64decode)
+        fail_msg: >-
+          {{ backup_exclude_file }} does not exclude {{ data_root }}/models.
+          That is 49GB of re-downloadable weights; if it is being backed up the
+          retention maths in vars.yml is wrong.
+      tags: [backup]
+
+    - name: Every backup source must exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      become: true
+      register: vrf_backup_sources
+      loop: "{{ backup_sources }}"
+      tags: [backup]
+
+    - name: Backing up a path that does not exist is a silent no-op
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+        fail_msg: >-
+          Backup source {{ item.item }} does not exist. restic would skip it
+          and still report success, so the snapshot would be quietly
+          incomplete.
+      loop: "{{ vrf_backup_sources.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      tags: [backup]
+
+    - name: Get the backup timer states
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      register: vrf_backup_timers
+      loop:
+        - lab-backup.timer
+        - lab-backup-check.timer
+      tags: [backup]
+
+    - name: Both timers are enabled and running
+      ansible.builtin.assert:
+        that:
+          - item.status.UnitFileState == 'enabled'
+          - item.status.ActiveState == 'active'
+        fail_msg: >-
+          {{ item.item }} is not enabled and active. A backup that is installed
+          but not scheduled is not a backup.
+      loop: "{{ vrf_backup_timers.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      tags: [backup]
+
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the
 # host pattern turns every assertion below into a silent pass. This play runs

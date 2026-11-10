@@ -681,3 +681,60 @@ diag_crash_watch_bin: /usr/local/sbin/lab-crash-watch
 # place. The box is now in the exact configuration that failed three times,
 # with memory speed as the ONLY changed variable.
 diag_nvme_apst_max_latency_us: 100000
+
+# --- backups ------------------------------------------------------------------
+#
+# Asked for on 2026-11-09, after lab's only NVMe went state=dead three times in
+# 22 hours and an earlier rsync reported success over 55 of 197 files it had
+# left at zero bytes. Until then this was deliberately deferred (roles/base).
+#
+# The target is a 1TB 7200rpm CMR Seagate on SATA. That choice is about failure
+# domains, not capacity: different controller, different bus, no host memory
+# buffer, and no PCIe endpoint that can raise a controller-fatal error. A 4TB
+# SSD was priced at ~$1400; sequential write throughput was never the
+# constraint for a nightly backup, so spinning disk is the right part.
+#
+# CMR matters and SMR would not do: shingled drives rewrite whole zones on
+# partial writes, which is pathological for this workload.
+#
+# Pinned by by-id, which embeds the serial. NEVER by /dev/sda -- device names
+# shift the moment another drive is added, and a backup pointed at the wrong
+# disk is worse than no backup at all.
+backup_disk_by_id: /dev/disk/by-id/ata-ST1000DM010-2EP102_ZN1TK4CH
+backup_disk_uuid: 9159c844-56a0-49df-83f7-09285613d595
+
+# /backups is the mount; the repository is a directory INSIDE it. That is what
+# makes room for a second repo later -- /backups/desktop alongside
+# /backups/local -- without restructuring anything.
+backup_mount: /backups
+backup_repo: /backups/local
+
+# Generated on the host by the role, 0600 root. NEVER stored in this
+# repository, which is public. Losing this file orphans every snapshot, since
+# restic derives the repository keys from it.
+backup_password_file: /etc/restic/local-password
+
+backup_script: /usr/local/sbin/lab-backup
+backup_check_script: /usr/local/sbin/lab-backup-check
+backup_exclude_file: /etc/restic/excludes
+
+# What is protected. /data/datasets (281GB) is the whole point: hand-collected
+# and existing nowhere else but this box and Robert's desktop. /etc carries the
+# service configuration and the two secrets that are not in git. The beekeeper
+# persistent tree holds training checkpoints, which cost GPU-hours to recreate.
+backup_sources:
+  - "{{ data_root }}"
+  - /etc
+  - /home/beekeeper/beekeeper/projects
+
+backup_schedule: "*-*-* 02:30:00"
+backup_check_schedule: "Sun *-*-* 04:00:00"
+
+# A full --read-data over ~300GB on a 7200rpm disk takes hours. A rotating
+# subset covers the whole repository over several weeks and never blocks the
+# box for a night.
+backup_check_subset: 5%
+
+backup_keep_daily: 7
+backup_keep_weekly: 4
+backup_keep_monthly: 6

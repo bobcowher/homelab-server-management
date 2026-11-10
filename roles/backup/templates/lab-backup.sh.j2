@@ -1,0 +1,59 @@
+#!/bin/bash
+# Managed by Ansible. See roles/backup/tasks/main.yml.
+#
+# restic backup of {{ backup_sources | join(', ') }} into {{ backup_repo }}.
+#
+# Exit non-zero on any real failure so the systemd unit records it. restic
+# returns 3 when it could not read SOME files but completed; that is treated as
+# a failure here on purpose -- on this box an unreadable file is exactly the
+# symptom of the NVMe dropping out, and it must not be logged as success.
+set -uo pipefail
+
+export RESTIC_REPOSITORY={{ backup_repo }}
+export RESTIC_PASSWORD_FILE={{ backup_password_file }}
+
+log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+
+# The repository lives on a removable disk. If it is not mounted, restic would
+# happily CREATE a new empty repo on the root filesystem at the mountpoint and
+# report success -- filling the disk we are trying to protect and producing a
+# backup that is not a backup. Refuse instead.
+if ! findmnt -no TARGET {{ backup_mount }} >/dev/null 2>&1; then
+    log "FATAL: {{ backup_mount }} is not mounted; refusing to run"
+    exit 1
+fi
+if [ ! -f "{{ backup_repo }}/config" ]; then
+    log "FATAL: no restic repo at {{ backup_repo }}; refusing to run"
+    exit 1
+fi
+
+log "backup starting"
+restic backup \
+    --verbose \
+    --tag scheduled \
+    --exclude-file {{ backup_exclude_file }} \
+{% for s in backup_sources %}
+    {{ s }} \
+{% endfor %}
+    2>&1
+rc=$?
+if [ "$rc" -ne 0 ]; then
+    log "FATAL: restic backup exited $rc"
+    exit "$rc"
+fi
+log "backup complete"
+
+log "applying retention: {{ backup_keep_daily }}d / {{ backup_keep_weekly }}w / {{ backup_keep_monthly }}m"
+restic forget \
+    --tag scheduled \
+    --keep-daily {{ backup_keep_daily }} \
+    --keep-weekly {{ backup_keep_weekly }} \
+    --keep-monthly {{ backup_keep_monthly }} \
+    --prune 2>&1
+rc=$?
+[ "$rc" -eq 0 ] || { log "FATAL: restic forget --prune exited $rc"; exit "$rc"; }
+
+log "repository stats"
+restic stats --mode raw-data 2>&1 | sed 's/^/  /'
+df -h {{ backup_mount }} | tail -1 | sed 's/^/  /'
+log "done"

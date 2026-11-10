@@ -1,0 +1,129 @@
+---
+# Backups for lab. Previously a deferred decision (see roles/base), now asked
+# for explicitly on 2026-11-09 after the only NVMe went state=dead three times
+# in 22 hours and an earlier rsync silently left 55 of 197 files at zero bytes.
+#
+# Target is a 1TB 7200rpm CMR Seagate on SATA -- a deliberately different
+# failure domain from the NVMe: different controller, different bus, no HMB, no
+# PCIe endpoint that can raise a controller-fatal error.
+#
+# This role does NOT partition or format anything. That was a one-time act
+# (documented in docs/RUNBOOK.md) and giving a playbook standing destructive
+# authority over the backup disk is exactly the wrong trade for a role whose
+# job is protecting data.
+
+- name: Refuse to proceed unless the backup disk is the expected one
+  ansible.builtin.stat:
+    path: "{{ backup_disk_by_id }}"
+  register: backup_disk
+
+- name: The backup disk must be present and identifiable
+  ansible.builtin.assert:
+    that:
+      - backup_disk.stat.exists
+    fail_msg: >-
+      {{ backup_disk_by_id }} is missing. The backup disk is pinned by
+      by-id (which embeds the serial) and never by /dev/sda, because device
+      names shift as soon as another drive is added -- and a backup job
+      pointed at the wrong disk is worse than no backup job.
+
+- name: Mount the backup disk by UUID
+  ansible.posix.mount:
+    path: "{{ backup_mount }}"
+    src: "UUID={{ backup_disk_uuid }}"
+    fstype: ext4
+    # nofail: this disk is not required to boot. Without it, a disk that dies
+    # or is unplugged drops the box to an emergency shell on the next reboot --
+    # turning a degraded backup into an outage.
+    opts: defaults,nofail,noatime
+    state: mounted
+
+- name: Create the repository parent directory
+  ansible.builtin.file:
+    path: "{{ backup_repo | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Create the credential directory
+  ansible.builtin.file:
+    path: "{{ backup_password_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Generated on the host, never stored in this repository, which is PUBLIC.
+# `creates` is what makes this safe to re-run: regenerating the password would
+# orphan every existing snapshot, because restic derives the repo keys from it.
+- name: Generate the repository password if there is not one already
+  ansible.builtin.shell:
+    cmd: install -m 0600 -o root -g root /dev/null {{ backup_password_file }} &&
+         openssl rand -base64 48 > {{ backup_password_file }}
+    creates: "{{ backup_password_file }}"
+
+- name: Lock down the repository password
+  ansible.builtin.file:
+    path: "{{ backup_password_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Initialise the restic repository if it does not exist
+  ansible.builtin.command:
+    cmd: restic init --repo {{ backup_repo }}
+    creates: "{{ backup_repo }}/config"
+  environment:
+    RESTIC_PASSWORD_FILE: "{{ backup_password_file }}"
+
+- name: Install the exclude list
+  ansible.builtin.template:
+    src: excludes.j2
+    dest: "{{ backup_exclude_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the backup and verification scripts
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - { src: lab-backup.sh.j2, dest: "{{ backup_script }}" }
+    - { src: lab-backup-check.sh.j2, dest: "{{ backup_check_script }}" }
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Install the systemd units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - lab-backup.service
+    - lab-backup.timer
+    - lab-backup-check.service
+    - lab-backup-check.timer
+  notify: Reload systemd for backup units
+
+- name: Flush handlers so the timers below enable against current units
+  ansible.builtin.meta: flush_handlers
+
+# The timers are enabled; the services are deliberately NOT started here. A
+# playbook run should not kick off a multi-hundred-gigabyte backup as a side
+# effect, possibly against a box that is mid-training.
+- name: Enable the backup timers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop:
+    - lab-backup.timer
+    - lab-backup-check.timer

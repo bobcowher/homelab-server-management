@@ -21,9 +21,11 @@
       - python3-apt
     state: present
 
-# restic is installed but deliberately left unconfigured. Backups are a
-# deferred decision (spec section 10). Do not add repos, timers, or
-# credentials here without being asked.
+# restic is installed here; it is CONFIGURED in roles/backup, which was asked
+# for on 2026-11-09 after the only NVMe went state=dead three times in 22 hours
+# (docs/RUNBOOK.md). Backups were a deferred decision until then. Still do not
+# add repos, timers or credentials to THIS role -- they belong in roles/backup,
+# whose repository password is generated on the host and never committed.
 
 - name: Scope unattended-upgrades to security origins only
   ansible.builtin.copy:

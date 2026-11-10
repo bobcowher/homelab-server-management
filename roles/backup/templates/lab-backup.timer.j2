@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily restic backup
+
+[Timer]
+OnCalendar={{ backup_schedule }}
+# lab is powered off overnight and does not auto-boot, so a timer that only
+# fires at a fixed hour would simply be missed on any day the box was off.
+# Persistent runs the missed job on the next boot instead.
+Persistent=true
+# Avoid starting the instant the box comes up, when services are still settling.
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

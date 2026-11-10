@@ -1,0 +1,15 @@
+[Unit]
+Description=Verify the restic repository (structure + a slice of real data)
+Documentation=file://{{ backup_check_script }}
+RequiresMountsFor={{ backup_mount }}
+
+[Service]
+Type=oneshot
+ExecStart={{ backup_check_script }}
+User=root
+Nice=15
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+ProtectSystem=strict
+ReadWritePaths={{ backup_mount }}
+PrivateTmp=true
