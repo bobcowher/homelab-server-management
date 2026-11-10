@@ -1764,19 +1764,34 @@ that.
 | DIMM_A2, DIMM_B2 | `CMK32GX4M2D3600C18` | 2 × 16 GB, DDR4-3600 CL18 |
 
 96 GB total, all four dual-rank, everything running at 3200 MT/s with the 3600 kit downclocked to
-match. The 5950X is Zen 3, and AMD's rated DDR4 ceiling for it depends entirely on how the slots are
-populated:
+match. ⚠️ **The derating table below is UNVERIFIED — treat it as community lore, not as AMD spec.**
+Re-checked on 2026-11-09: the only figure traceable to AMD for Ryzen 5000 is **DDR4-3200 as the
+supported speed, with no per-population derating published**. The 2933/2667 pattern is repeated
+widely in enthusiast sources, but the only primary-looking source found was a Zen 1-era table with
+much lower numbers (1866/2133/2400/2667). This table entered the repo uncited in `a696ed2` and was
+then repeated as fact — including the claim that this box ran "533 MT/s over spec", which is
+probably wrong, since 3200 may simply *be* in spec.
 
-| Population | Rated ceiling |
+| Population | Commonly cited ceiling (UNVERIFIED) |
 |---|---|
 | 2 DIMMs, single-rank | 3200 MT/s |
 | 2 DIMMs, dual-rank | 3200 MT/s |
 | 4 DIMMs, single-rank | 2933 MT/s |
 | **4 DIMMs, dual-rank (what's installed)** | **2667 MT/s** |
 
-So this box runs its memory ~20% above the rated ceiling for its own population, with two kits that
-were never validated against each other. That is the first thing to suspect when chasing
-instability, ahead of a failing chip.
+**What survives the correction is the direction, not the number.** Four dual-rank DIMMs is the
+hardest configuration the AM4 controller faces — eight ranks across two channels — and it is
+demonstrably harder at 3200 than at 2666. So lowering the clock is a legitimate way to buy
+stability margin. It is NOT "returning to spec", and should not be described that way.
+
+Two kits that were never validated against each other remains a real and separate concern.
+
+**Matching kits does not raise the clock ceiling.** The constraint is DIMM count and rank. 4 x 32GB
+of a single SKU is still four dual-rank DIMMs. The only way to a genuinely higher clock is **two**
+DIMMs: 2 x 32GB runs 3200 comfortably and often 3600 with tuning, which is also where Zen 3 wants
+to be, because FCLK should sit at half the memory clock (1:1) and most Zen 3 chips top out near
+FCLK 1800-1900. So the real choice is **128GB at a conservative clock, or 64GB fast** -- not both.
+For a GPU-bound training box the bandwidth difference is expected to be small.
 
 **Do not size memory from `sar` alone.** `sar` samples every 10 minutes
 (`sysstat-collect.timer`, `OnCalendar=*:00/10`) on a host that reboots daily, so a training run that
@@ -1791,9 +1806,10 @@ while true; do awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} /^Committed_AS:/{c
   /proc/meminfo; sleep 5; done
 ```
 
-**The one free improvement is the clock, not the sticks.** Whatever ends up in the slots, four
-dual-rank DIMMs are rated 2667 and this board runs 3200. Setting 2667 (or testing 2933) in the BIOS
-costs nothing and is the only change that reduces risk without buying anything. Capacity is the
+**The one free improvement is the clock, not the sticks.** Lowering it costs nothing and is the
+only change that reduces risk without buying anything — but see the correction above: this buys
+margin on a hard topology, it is not a return to a documented limit. Done on 2026-11-09: set to
+**2666 MT/s** (the BIOS offers 2666, not 2667; they are the same 2666.67 MT/s rounded differently). Capacity is the
 binding constraint on everything else — see the gap below for what the options actually cost.
 
 ---
