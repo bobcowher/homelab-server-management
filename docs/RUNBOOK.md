@@ -1543,6 +1543,73 @@ log CFS until 18:21:18. Temperature comes from an admin command, so **the contro
 answering admin commands ~37 seconds before the driver declared it dead.** A watcher that notices
 hwmon reads failing has a ~37 s head start on the fault.
 
+#### The GPUs are doing it too, and that reframes everything
+
+**2026-11-09, same boot, after HMB was disabled.** The NVMe survived 75 minutes of continuous 3090
+load — clearing the 16, 66 and 74-minute marks where the three previous runs died. But a *different*
+run on the same box died at 31 minutes with:
+
+```
+torch.AcceleratorError: CUDA error: unspecified launch failure
+Returning 719 (CUDA_ERROR_LAUNCH_FAILED) from cuMemcpyDtoHAsync_v2
+```
+
+and the kernel log explains why:
+
+```
+NVRM: Xid (PCI:0000:04:00): 32  x2      18:57:52   RTX 3060
+NVRM: Xid (PCI:0000:04:00): 69           18:58:15   RTX 3060
+NVRM: Xid (PCI:0000:04:00): 32  x2      19:03:32   RTX 3060
+NVRM: Xid (PCI:0000:0a:00): 32  x2      19:03:49   RTX 3090
+                                        19:03:52   the run dies
+```
+
+**Xid 32 is "invalid or corrupted push buffer stream."** The push buffer is a command stream the
+driver writes into **system RAM** and the GPU DMAs out of. Two *different* GPUs, on two *different*
+PCIe paths — `04:00` behind the chipset, `0a:00` behind CPU root port `00:03.1` — both reading
+corrupted command streams within six minutes. That is not two independent GPU faults.
+
+**And the NVMe's Host Memory Buffer is also a system-RAM structure a device DMAs from.** Three
+devices, one mechanism. The common factor is system memory or the path to it.
+
+Note what disabling HMB therefore actually did: it removed the *drive's* dependency on a RAM-resident
+structure. **That protects the drive whether or not the drive was ever at fault.** A clean run with
+HMB off is not evidence that the controller was the root cause — it is equally consistent with bad
+memory. Do not read the 75-minute run as a diagnosis.
+
+#### The memory is out of spec on this platform
+
+```
+DIMM_A1  32GB  CMK64GX4M2E3200C16  Rank 2  3200 MT/s
+DIMM_A2  16GB  CMK32GX4M2D3600C18  Rank 2  3200 MT/s
+DIMM_B1  32GB  CMK64GX4M2E3200C16  Rank 2  3200 MT/s
+DIMM_B2  16GB  CMK32GX4M2D3600C18  Rank 2  3200 MT/s
+```
+
+**Four dual-rank DIMMs. Zen 3 rates that topology at 2667 MT/s.** 533 MT/s over spec, in the most
+demanding memory arrangement AM4 supports.
+
+⚠️ **A reasoning trap that cost most of a day.** These parts came off a stable Intel 12700f build,
+and that was used to *demote* the RAM hypothesis. It is not evidence. Intel's memory controller runs
+four DIMMs at 3200 routinely; AMD's frequently will not. **The memory controller is exactly what
+changed between the platforms**, so stability on the old one says nothing about this one. Provenance
+evidence is only as good as the part of the system it holds constant.
+
+**`memtest86+` may pass anyway.** Corruption of DMA structures under mixed CPU+GPU+device traffic
+often does not reproduce under memtest's access patterns. A clean pass is **not** exoneration here —
+only a failure is informative. It is installed now (`apt install memtest86+`, a GRUB menu entry, and
+a monitor to read it — lab is headless).
+
+**Buying one more matched kit does not fix this.** 4 x 32GB of a single SKU is still four dual-rank
+DIMMs, still rated 2667. For 3200 the board needs only **two** DIMMs. It is 128GB at 2667, or 64GB
+at 3200 — not both.
+
+Could also be the used 5950X's memory controller or IO die rather than the DIMMs. Setting 2667 tests
+the combination, which is the right first move either way.
+
+**How to tell if it worked:** the Xid errors are the discriminator. Nothing done on 2026-11-09 —
+HMB, APST, pstore — could affect them. If they stop after 2667, that is the answer.
+
 #### `/data` is still unbacked
 
 Two deaths in twenty hours on a single drive with no backup, and the first one silently truncated

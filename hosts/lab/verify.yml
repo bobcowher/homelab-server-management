@@ -2408,6 +2408,33 @@
         diag_grubcfg_text: "{{ diag_grubcfg.content | b64decode }}"
       tags: [diagnostics]
 
+    # Not the kernel command line -- the module's live parameter. A parameter
+    # being present on the cmdline is not the same as the module honouring it,
+    # which is the pstore.backend lesson restated.
+    - name: Read the live HMB module parameter
+      ansible.builtin.slurp:
+        src: /sys/module/nvme/parameters/max_host_mem_size_mb
+      register: diag_hmb_live
+      failed_when: false
+      tags: [diagnostics]
+      when: diag_ramoops_armed | bool
+
+    - name: HMB is actually off in the running kernel once armed
+      ansible.builtin.assert:
+        that:
+          - diag_hmb_live.content is defined
+          - (diag_hmb_live.content | b64decode | trim) == (diag_nvme_hmb_max_mb | string)
+        fail_msg: >-
+          nvme's live max_host_mem_size_mb is
+          '{{ diag_hmb_live.content | default('') | b64decode | trim }}', not
+          '{{ diag_nvme_hmb_max_mb }}'. The HMB experiment is NOT running, so
+          any conclusion drawn from this boot about the Host Memory Buffer is
+          worthless.
+      tags: [diagnostics]
+      when:
+        - diag_ramoops_armed | bool
+        - "'nvme.max_host_mem_size_mb=' ~ diag_nvme_hmb_max_mb in (diag_cmdline.content | b64decode)"
+
     - name: Report whether the HMB experiment is live on the running kernel
       ansible.builtin.debug:
         msg: >-
