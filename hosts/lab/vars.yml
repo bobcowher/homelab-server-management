@@ -632,7 +632,14 @@ diag_pstore_backend: ramoops
 #
 # 0 disables HMB. Reversible: 128 is the default. If the drive still dies with
 # HMB off, the controller is simply failing and the drive should be replaced.
-diag_nvme_hmb_max_mb: 0
+#
+# RESTORED TO DEFAULT 2026-11-09, deliberately. Memory was dropped from
+# 3200 to 2666 MT/s, and leaving HMB off alongside that would confound the two.
+# The sharper reason: if out-of-spec memory was corrupting the HMB, then fixing
+# the memory fixes the drive, and leaving HMB off would keep the drive crippled
+# for nothing. Reverting is what reveals that. Set to 0 again if the dropouts
+# come back at 2666.
+diag_nvme_hmb_max_mb: 128
 
 diag_crash_capture_bin: /usr/local/sbin/lab-crash-capture
 diag_crash_watch_bin: /usr/local/sbin/lab-crash-watch
@@ -659,4 +666,10 @@ diag_crash_watch_bin: /usr/local/sbin/lab-crash-watch
 # of NVMe temperature in RAM. If a run lasts materially longer than ~70 minutes
 # that is evidence for APST; if it drops out at the same point anyway, APST is
 # eliminated and the thermal trace in /run/lab-crash-watch.txt is what to read.
-diag_nvme_apst_max_latency_us: 0
+#
+# RESTORED TO DEFAULT 2026-11-09 for the same reason. APST was already
+# eliminated as a cause -- the drive died SOONER with it disabled -- so holding
+# it at 0 bought no information while leaving a second deviation from stock in
+# place. The box is now in the exact configuration that failed three times,
+# with memory speed as the ONLY changed variable.
+diag_nvme_apst_max_latency_us: 100000

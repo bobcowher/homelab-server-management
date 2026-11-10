@@ -2419,7 +2419,7 @@
       tags: [diagnostics]
       when: diag_ramoops_armed | bool
 
-    - name: HMB is actually off in the running kernel once armed
+    - name: HMB in the running kernel matches what is configured
       ansible.builtin.assert:
         that:
           - diag_hmb_live.content is defined
@@ -2427,9 +2427,9 @@
         fail_msg: >-
           nvme's live max_host_mem_size_mb is
           '{{ diag_hmb_live.content | default('') | b64decode | trim }}', not
-          '{{ diag_nvme_hmb_max_mb }}'. The HMB experiment is NOT running, so
-          any conclusion drawn from this boot about the Host Memory Buffer is
-          worthless.
+          the configured '{{ diag_nvme_hmb_max_mb }}'. The kernel is not in the
+          state this repo believes it is in, so any conclusion drawn from this
+          boot about the Host Memory Buffer is worthless.
       tags: [diagnostics]
       when:
         - diag_ramoops_armed | bool
@@ -2439,19 +2439,20 @@
       ansible.builtin.debug:
         msg: >-
           HMB on the running kernel:
-          {{ 'DISABLED (experiment live)'
-             if 'nvme.max_host_mem_size_mb=0' in (diag_cmdline.content | b64decode)
-             else 'still enabled -- the experiment arms on the next boot' }}
+          {{ 'DISABLED' if 'nvme.max_host_mem_size_mb=0'
+                           in (diag_cmdline.content | b64decode)
+             else 'enabled (stock)' }}
+          -- configured value is {{ diag_nvme_hmb_max_mb }}
       tags: [diagnostics]
 
-    - name: Report whether the APST experiment is live on the running kernel
+    - name: Report whether APST is disabled on the running kernel
       ansible.builtin.debug:
         msg: >-
           APST on the running kernel:
-          {{ 'DISABLED (experiment live)'
-             if 'nvme_core.default_ps_max_latency_us=0'
-                in (diag_cmdline.content | b64decode)
-             else 'still at the default -- the experiment arms on the next boot' }}
+          {{ 'DISABLED' if 'nvme_core.default_ps_max_latency_us=0'
+                           in (diag_cmdline.content | b64decode)
+             else 'enabled (stock)' }}
+          -- configured value is {{ diag_nvme_apst_max_latency_us }}
       tags: [diagnostics]
 
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
