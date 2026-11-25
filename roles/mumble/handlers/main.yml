@@ -1,0 +1,6 @@
+---
+# Drops every connected client. Only fires when the configuration changes.
+- name: Restart mumble-server
+  ansible.builtin.systemd_service:
+    name: mumble-server
+    state: restarted

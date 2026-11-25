@@ -1,0 +1,71 @@
+---
+# Mumble voice server, LAN only. Native from apt rather than containerised:
+# the package ships a hardened systemd unit (ProtectSystem, SystemCallFilter,
+# no capabilities beyond binding), and a container would add a second firewall
+# path (DOCKER-USER) for a service ufw already covers.
+#
+# NEEDRESTART_SUSPEND is load-bearing. On 2026-11-24 this install also upgraded
+# libpcre2-8-0, which nearly every daemon on the box links. needrestart is
+# installed and runs as an apt hook, and under a non-interactive apt it
+# restarts the services still mapping the old library -- docker, llama-swap,
+# beekeeper, sonarqube -- as a side effect of adding a voice server. Running
+# processes keep the old mapping and are unaffected until their next natural
+# restart, which on this box is every morning.
+- name: Install the Mumble server
+  ansible.builtin.apt:
+    name: mumble-server
+    state: present
+    cache_valid_time: 3600
+  environment:
+    NEEDRESTART_SUSPEND: "1"
+
+# Under /data so restic picks it up: backups cover /data and /etc, and the
+# package default (/var/lib/mumble-server) is in neither. Channels, ACLs and
+# registered users live in this file. The unit's ProtectSystem=full leaves
+# /data writable and ProtectHome does not reach it.
+- name: Create the Mumble data directory
+  ansible.builtin.file:
+    path: "{{ mumble_data_dir }}"
+    state: directory
+    owner: mumble-server
+    group: mumble-server
+    mode: "0750"
+
+# Kept out of the repository, which is public. Same shape as the SonarQube
+# database password: umask before the redirect so the file is never briefly
+# world-readable, and `creates:` so a second apply does not roll the password
+# out from under every client that has saved it.
+- name: Generate the server password if it does not exist
+  ansible.builtin.shell:
+    cmd: umask 077 && openssl rand -base64 12 > /etc/mumble/server_password
+    creates: /etc/mumble/server_password
+
+- name: Read the server password
+  ansible.builtin.slurp:
+    src: /etc/mumble/server_password
+  register: mumble_server_password_raw
+  no_log: true
+
+- name: Record the server password
+  ansible.builtin.set_fact:
+    mumble_server_password: "{{ mumble_server_password_raw.content | b64decode | trim }}"
+  no_log: true
+
+# Replaces the package's conffile outright. dpkg will ask about it on a future
+# package upgrade; that only happens on a deliberate apt run, since automated
+# upgrades are masked on this box.
+- name: Install the Mumble server configuration
+  ansible.builtin.template:
+    src: mumble-server.ini.j2
+    dest: /etc/mumble/mumble-server.ini
+    owner: root
+    group: mumble-server
+    mode: "0640"
+  no_log: true
+  notify: Restart mumble-server
+
+- name: Enable and start the Mumble server
+  ansible.builtin.systemd_service:
+    name: mumble-server
+    enabled: true
+    state: started

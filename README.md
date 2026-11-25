@@ -56,6 +56,7 @@ The useful endpoints are:
 | llama-swap API and UI | `http://lab.local:8080/` |
 | OpenAI-compatible API | `http://lab.local:8080/v1` |
 | Beekeeper | `http://lab.local:5000/` |
+| Mumble (voice) | `lab.local:64738`, password in `/etc/mumble/server_password` |
 | SSH | `ssh robertcowher@lab.local` |
 
 Open WebUI and File Browser sit behind Caddy. Beekeeper is deliberately served
@@ -118,7 +119,8 @@ ansible-playbook -i inventory/hosts.yml hosts/lab/verify.yml --tags webstack
 ```
 
 Available tags are `base`, `users`, `storage`, `nvidia`, `docker`, `firewall`,
-`conda`, `tools`, `llama_swap`, `webstack`, `beekeeper`, and `power`.
+`conda`, `tools`, `llama_swap`, `webstack`, `beekeeper`, `bobgpt`,
+`sonarqube`, `mumble`, `power`, and `backup`.
 
 ## Repository scripts
 

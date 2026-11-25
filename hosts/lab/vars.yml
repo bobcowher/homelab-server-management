@@ -319,6 +319,12 @@ power_gpu_exclude_unit: "bobgpt.service"
 # mid-conversation.
 power_bobgpt_unit: "bobgpt.service"
 
+# The Mumble port, checked for established client connections. A voice call
+# barely moves CPU or load, so without this the sar window reads a call in
+# progress as idle and the box powers off mid-conversation. Empty disables the
+# signal.
+power_mumble_port: "{{ mumble_port }}"
+
 # --- GPU power limits --------------------------------------------------------
 #
 # Applied at boot by roles/nvidia (gpu-power-limit.service), because power
@@ -545,6 +551,23 @@ sonarqube_start_timeout: 300
 sonarqube_scanner_version: "8.1.0.6389"
 sonarqube_scanner_sha256: "bb8f709f9cb73352f8d1260a3b3c506c0f41146754bc630762c126d795499d0b"
 sonarqube_scanner_root: /opt/sonar-scanner
+
+# --- mumble ------------------------------------------------------------------
+#
+# Voice chat, LAN only. Binds all interfaces; ufw allows this port from
+# lan_subnet only, TCP (control, TLS) and UDP (voice). No docker_bridge_subnet
+# rule: nothing in a container talks to it.
+mumble_port: 64738
+
+# Holds the SQLite database (channels, ACLs, registered users). Under /data so
+# restic backs it up.
+mumble_data_dir: "{{ data_root }}/mumble"
+
+# Package defaults, stated so a change is a diff here rather than a surprise.
+# bandwidth is the per-client cap in bits/s; 558000 is the server default and
+# is far more than one voice stream needs.
+mumble_bandwidth: 558000
+mumble_max_users: 100
 
 # --- crash diagnostics -------------------------------------------------------
 #

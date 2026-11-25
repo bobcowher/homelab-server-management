@@ -26,6 +26,7 @@ IDLE_MINUTES={{ power_idle_window_minutes }}
 MIN_UPTIME_MINUTES={{ power_min_uptime_minutes }}
 GPU_EXCLUDE_UNIT="{{ power_gpu_exclude_unit | default('') }}"
 BOBGPT_UNIT="{{ power_bobgpt_unit | default('') }}"
+MUMBLE_PORT="{{ power_mumble_port | default('') }}"
 LOAD_MAX="{{ power_idle_load_max }}"
 CPU_MAX="{{ power_idle_cpu_max }}"
 OVERRIDE_FLAG="{{ power_override_flag }}"
@@ -196,6 +197,30 @@ else
         --no-pager -q 2>/dev/null | completion_request_lines )
     report "bobgpt inference" "${bobgpt_hits} request(s) in ${IDLE_MINUTES}m"
     [[ "$bobgpt_hits" -gt 0 ]] && veto "${bobgpt_hits} bobgpt request(s) in the last ${IDLE_MINUTES} minutes"
+fi
+
+# --- Mumble voice ------------------------------------------------------------
+#
+# A voice call is the clearest case of real use that no other signal sees: it
+# barely moves CPU or load, holds no CUDA context, and the people on it are not
+# logged in to the box. Without this the sar window reads a call in progress
+# as idle and powers off underneath it.
+#
+# Counts established TCP connections to the server port. Every Mumble client
+# holds one for the whole session, even while its voice travels over UDP.
+# Instantaneous, like the GPU and session checks: a call that ended at 23:55
+# does not keep the box up, and does not need to.
+#
+# A failed ss counts as activity, in keeping with the rest of this script.
+if [[ -z "$MUMBLE_PORT" ]]; then
+    report "mumble clients" "not installed"
+elif ! mumble_out=$(ss -Htn state established "( sport = :${MUMBLE_PORT} )" 2>/dev/null); then
+    report "mumble clients" "UNKNOWN (ss failed)"
+    veto "could not count Mumble connections"
+else
+    mumble_conns=$(grep -c . <<<"$mumble_out")
+    report "mumble clients" "${mumble_conns} connected"
+    [[ "$mumble_conns" -gt 0 ]] && veto "${mumble_conns} Mumble client(s) connected"
 fi
 
 # --- Beekeeper --------------------------------------------------------------

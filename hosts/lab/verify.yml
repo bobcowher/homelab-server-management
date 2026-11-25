@@ -336,6 +336,10 @@
           # prints, not just '6006', so a rule that opened a single port would
           # fail here rather than pass and then strand the second run.
           - ufwst.stdout is search(tensorboard_port_range | regex_escape)
+          # Both protocols. With only TCP open Mumble still connects, tunnelling
+          # voice over TCP, so a missing UDP rule would pass every other check.
+          - ufwst.stdout is search((mumble_port | string) + '/tcp')
+          - ufwst.stdout is search((mumble_port | string) + '/udp')
         fail_msg: "ufw is not in the expected state:\n{{ ufwst.stdout }}"
       tags: [firewall]
 
@@ -2011,6 +2015,7 @@
           - pw_dryrun.stdout is search('beekeeper')
           - pw_dryrun.stdout is search('gpu compute processes')
           - pw_dryrun.stdout is search('login sessions')
+          - pw_dryrun.stdout is search('mumble clients')
         fail_msg: "The idle check did not evaluate every signal:\n{{ pw_dryrun.stdout }}"
       tags: [power]
 
@@ -2642,6 +2647,74 @@
       loop_control:
         label: "{{ item.item }}"
       tags: [backup]
+
+    # --- mumble ---------------------------------------------------------------
+    - name: Read the Mumble server unit state
+      ansible.builtin.systemd_service:
+        name: mumble-server
+      register: vrf_mumble_unit
+      tags: [mumble]
+
+    - name: The Mumble server is enabled and running
+      ansible.builtin.assert:
+        that:
+          - vrf_mumble_unit.status.UnitFileState == 'enabled'
+          - vrf_mumble_unit.status.ActiveState == 'active'
+        fail_msg: "mumble-server is not enabled and active"
+      tags: [mumble]
+
+    - name: Read the Mumble listeners
+      ansible.builtin.command: ss -Hlntup
+      become: true
+      register: vrf_mumble_ss
+      changed_when: false
+      tags: [mumble]
+
+    # Ice is disabled in the config; a listener on 6502 would mean the config
+    # was not the one the server read.
+    - name: Mumble listens on TCP and UDP, and Ice does not
+      ansible.builtin.assert:
+        that:
+          - vrf_mumble_ss.stdout_lines | select('search', '^tcp .*:' ~ mumble_port ~ ' .*mumble') | list | length > 0
+          - vrf_mumble_ss.stdout_lines | select('search', '^udp .*:' ~ mumble_port ~ ' .*mumble') | list | length > 0
+          - vrf_mumble_ss.stdout is not search(':6502 ')
+        fail_msg: "Unexpected Mumble listeners:\n{{ vrf_mumble_ss.stdout }}"
+      tags: [mumble]
+
+    - name: Read the Mumble configuration
+      ansible.builtin.slurp:
+        src: /etc/mumble/mumble-server.ini
+      register: vrf_mumble_ini
+      become: true
+      no_log: true
+      tags: [mumble]
+
+    # The password itself is never printed. An empty serverpassword would make
+    # the server open to anyone on the LAN.
+    - name: Mumble requires a password and keeps its database under /data
+      ansible.builtin.assert:
+        that:
+          - (vrf_mumble_ini.content | b64decode) is search('(?m)^serverpassword=\\S+')
+          - (vrf_mumble_ini.content | b64decode) is search('(?m)^database=' ~ (mumble_data_dir | regex_escape) ~ '/')
+        fail_msg: "mumble-server.ini has no server password or a database outside {{ mumble_data_dir }}"
+        quiet: true
+      no_log: true
+      tags: [mumble]
+
+    - name: Read the Mumble database
+      ansible.builtin.stat:
+        path: "{{ mumble_data_dir }}/mumble-server.sqlite"
+      register: vrf_mumble_db
+      become: true
+      tags: [mumble]
+
+    - name: The Mumble database exists where the backups will see it
+      ansible.builtin.assert:
+        that:
+          - vrf_mumble_db.stat.exists
+          - vrf_mumble_db.stat.pw_name == 'mumble-server'
+        fail_msg: "{{ mumble_data_dir }}/mumble-server.sqlite is missing or not owned by mumble-server"
+      tags: [mumble]
 
 # ansible-playbook exits 0 when a play matches no hosts. For a verification
 # playbook that is the worst possible default: a typo in the inventory or the

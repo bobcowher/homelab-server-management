@@ -28,6 +28,20 @@
     # than a proxy.
     - "{{ sonarqube_port }}"
 
+# Mumble needs both protocols: TCP carries the TLS control channel and UDP the
+# voice. With only TCP open, clients still connect -- voice falls back to being
+# tunnelled over TCP -- so a missing UDP rule shows up as worse latency, not as
+# an error.
+- name: Allow Mumble from the LAN
+  community.general.ufw:
+    rule: allow
+    port: "{{ mumble_port }}"
+    proto: "{{ item }}"
+    src: "{{ lan_subnet }}"
+  loop:
+    - tcp
+    - udp
+
 # Beekeeper starts a TensorBoard for each training run and assigns it the
 # first free port it finds, scanning upward from 6006. These are per-run and
 # short-lived, so they cannot be enumerated the way 5000 and 8080 can.

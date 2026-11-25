@@ -303,6 +303,32 @@ check "a configured bobgpt unit is read" "bobgpt inference         0 request(s)"
     's/^BOBGPT_UNIT=.*/BOBGPT_UNIT="systemd-journald.service"/'
 
 echo
+echo "== mumble connections =="
+
+# An unset port must report "not installed" and must NOT veto, or a host
+# without Mumble could never shut down.
+check "no mumble port does not veto" "mumble clients           not installed" \
+    's/^MUMBLE_PORT=.*/MUMBLE_PORT=""/'
+
+# Port 1 has no listener, so nothing can be established on it. Proves an
+# empty ss result counts zero rather than one (a here-string of "" is a
+# newline, and a careless count would see it as a client).
+check "a port with no connections counts zero" "mumble clients           0 connected" \
+    's/^MUMBLE_PORT=.*/MUMBLE_PORT="1"/'
+
+# A connection we open ourselves, to sshd on loopback, so the case does not
+# depend on anyone actually being in a call. Matched on the veto text, not a
+# count, because the operator's own SSH session is also established on :22.
+if exec 3<>/dev/tcp/127.0.0.1/22 2>/dev/null; then
+    check "an established connection vetoes" "Mumble client(s) connected" \
+        's/^MUMBLE_PORT=.*/MUMBLE_PORT="22"/'
+    exec 3<&- 3>&-
+else
+    echo "FAIL  could not open a loopback connection to sshd for the veto case"
+    fail=$(( fail + 1 ))
+fi
+
+echo
 echo "== gpu exclusion filter =="
 
 # bobgpt is a resident GPU service, and a CUDA context lives for the life of

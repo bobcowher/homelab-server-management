@@ -24,9 +24,11 @@
     - { role: beekeeper, tags: [beekeeper] }
     - { role: bobgpt, tags: [bobgpt] }
     - { role: sonarqube, tags: [sonarqube] }
+    - { role: mumble, tags: [mumble] }
     # After the services: the idle check reads llama-swap's journal,
-    # beekeeper's API, and bobgpt's journal and cgroup, so all three should be
-    # in their final state before it is installed and dry-run.
+    # beekeeper's API, bobgpt's journal and cgroup, and Mumble's connections,
+    # so all of them should be in their final state before it is installed
+    # and dry-run.
     - { role: power, tags: [power] }
     # After everything: it backs up /data and /etc, so every role that creates
     # or writes them must have run first. It installs scripts and enables

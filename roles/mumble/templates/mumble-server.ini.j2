@@ -1,0 +1,37 @@
+; Managed by Ansible. See roles/mumble/tasks/main.yml.
+;
+; Only the keys that differ from the server's built-in defaults, plus the
+; ones the package ships uncommented. The full annotated reference is in the
+; package: dpkg -L mumble-server, or the upstream murmur.ini.
+
+; Under /data so it is backed up. See the role for why.
+database={{ mumble_data_dir }}/mumble-server.sqlite
+
+; Empty disables the Ice RPC interface. Nothing here administers the server
+; over Ice, so the listener on 127.0.0.1:6502 would be surface for no gain.
+ice=
+icesecretwrite=
+
+; Empty means no log file: the unit runs with -fg, so everything goes to the
+; journal instead (journalctl -u mumble-server).
+logfile=
+
+welcometext="<br />Welcome to the lab Mumble server.<br />"
+
+; LAN reach is enforced by ufw (lan_subnet only), not by the bind.
+port={{ mumble_port }}
+
+; Required for every connection. Generated on the host; read it with
+;   sudo cat /etc/mumble/server_password
+serverpassword={{ mumble_server_password }}
+
+bandwidth={{ mumble_bandwidth }}
+users={{ mumble_max_users }}
+
+messageburst=5
+messagelimit=1
+allowping=true
+
+[Ice]
+Ice.Warn.UnknownProperties=1
+Ice.MessageSizeMax=65536
