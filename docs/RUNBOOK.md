@@ -11,7 +11,7 @@ for convenience; if the two ever disagree, this one is right.
 | **Host** | `lab.local` — the LAN is DHCP, never pin the IP |
 | **OS** | Ubuntu 26.04.1 LTS (`resolute`), kernel 7.0.0-31 |
 | **GPUs** | RTX 3060 12GB (device 0) + RTX 3090 24GB (device 1) |
-| **Disk** | 1.8T root, LVM, single NVMe, **no backups** |
+| **Disk** | 1.8T root, LVM, single NVMe; nightly restic backup to a 1TB SATA disk in the same box |
 | **Design** | [`docs/superpowers/specs/2026-09-04-lab-server-ansible-design.md`](superpowers/specs/2026-09-04-lab-server-ansible-design.md) |
 
 ---
@@ -1622,11 +1622,13 @@ the combination, which is the right first move either way.
 **How to tell if it worked:** the Xid errors are the discriminator. Nothing done on 2026-11-09 —
 HMB, APST, pstore — could affect them. If they stop after 2667, that is the answer.
 
-#### `/data` is still unbacked
+#### `/data` is now backed up
 
 Two deaths in twenty hours on a single drive with no backup, and the first one silently truncated
-55 of 197 files that `rsync` had reported as copied successfully. `restic` is installed and
-deliberately unconfigured (`roles/base/tasks/main.yml`). This is the open risk on this box.
+55 of 197 files that `rsync` had reported as copied successfully. That is what prompted
+`roles/backup`: restic, nightly at 23:00, to a separate SATA disk mounted at `/backups`, with a
+weekly read-back check. See [Backups are local only](#-backups-are-local-only) for what it does
+and does not cover.
 
 ---
 
@@ -1822,7 +1824,7 @@ Five operations can take the machine away from you. Each is guarded — the guar
 
 **Anything under `/etc/sudoers.d`** — A parse error breaks `sudo` for **every** user, including yours, and the playbook has no other route to root. Every sudoers file installs with `validate: /usr/sbin/visudo -cf %s`, which refuses to write a file that doesn't parse. Never drop that. *(It has already earned its keep once: it caught a wildcard the local sudo rejects.)*
 
-**The LVM extend** — Growing a mounted ext4 filesystem is routine and one-way. Already run; root fills the volume group and `VFree` is 0, so the task is now a no-op. There are no backups, so a bad extend means a rebuild.
+**The LVM extend** — Growing a mounted ext4 filesystem is routine and one-way. Already run; root fills the volume group and `VFree` is 0, so the task is now a no-op. The restic backup covers `/data` and `/etc` but not the OS, so a bad extend still means a rebuild, followed by a restore.
 
 **`sshd_config`** — Installed with `validate: /usr/sbin/sshd -t -f %s`, and the handler *reloads* rather than restarts so existing sessions survive. After any change, open a genuinely new connection before trusting it — an existing multiplexed session will happily mask a broken config:
 ```bash
@@ -1862,9 +1864,24 @@ contention with training instead; or move gemma off the 3060. Stopping bobgpt
 when not in use also works and costs nothing, which is part of why it is not
 enabled at boot.
 
-### 🔴 No backups — the largest outstanding risk
+### 🟠 Backups are local only
 
-`restic` is installed and deliberately unconfigured: no repos, timers, or credentials. `/data` sits on root, on a single NVMe, with no redundancy. A disk failure loses every model, dataset, and Beekeeper's training history. The fixed UIDs mean a restore would be *correct*; there is simply nothing to restore from.
+`roles/backup` runs restic nightly at 23:00 (`lab-backup.timer`) into `/backups/local`, on a 1TB SATA disk that is separate from the NVMe. `lab-backup-check.timer` reads a 5% sample of the repository back every Sunday at 22:00. Retention is 7 daily, 4 weekly, and 6 monthly snapshots. The fixed UIDs mean a restore comes back with correct ownership.
+
+```bash
+systemctl list-timers 'lab-backup*'
+journalctl -u lab-backup -n 50
+sudo RESTIC_REPOSITORY=/backups/local RESTIC_PASSWORD_FILE=/etc/restic/local-password restic snapshots
+```
+
+What it covers: `/data`, `/etc`, and `/home/beekeeper/beekeeper/projects`.
+
+What it does not:
+
+- **`/data/models`** is excluded on purpose, because every model records its `hf_repo` and can be downloaded again.
+- **Beekeeper's run history, `data/beekeeper.db`,** sits in the checkout outside `projects/`, so it is not backed up. Neither are `.secret_key` or `config.properties`.
+- **SonarQube's PostgreSQL** lives in `/var/lib/postgresql`. See [What a rebuild does not restore](#what-a-rebuild-does-not-restore).
+- **Nothing leaves the machine.** The backup disk shares the box, its PSU, and its power circuit, so a fire, theft, or electrical fault takes both copies.
 
 ### 🟠 Beekeeper's sudo grant is wider than intended
 
