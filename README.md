@@ -47,6 +47,11 @@ Beekeeper runs natively as its own user and manages training jobs. Its jobs use
 EGL for headless MuJoCo rendering and may start TensorBoard instances on ports
 6006 through 6016.
 
+A Mumble voice server (`mumble-server` from apt) runs natively. It is open to
+anyone on the LAN with no server password, and ufw keeps it off everything
+else. Its channels and registered users are stored in
+`/data/mumble/mumble-server.sqlite`, so the nightly backup includes them.
+
 The useful endpoints are:
 
 | Service | Address |
@@ -256,6 +261,45 @@ curl -s http://lab.local:8080/v1/models | jq '.data[].id'
 The first request to an unloaded model waits while its backend starts. Idle
 models unload after 900 seconds by default.
 
+### Current models
+
+| Name | Use | Placement | Measured generation |
+|---|---|---|---:|
+| `laguna-xs-2.1` | General chat (Q4_K_M) | Both cards | 163 tok/s |
+| `qwen3-coder` | Coding and tool calls (Qwen3-Coder-30B-A3B, Q6_K) | Both cards | 104 tok/s |
+| `qwen3.8-27b` | Coding candidate (dense 27B, Q6_K, 21 GB) | Both cards | not yet measured |
+| `qwen3-coder-next` | Coding candidate (80B MoE, 3B active, Q4_K_M, 48 GB) | Both cards plus system RAM | not yet measured |
+| `gemma-4-12b` | Text, images, and audio; always loaded | 3060 only | 41 tok/s |
+
+All but Gemma share one swapping slot: requesting one unloads whichever of
+the others is loaded. Gemma stays loaded on the 3060 and is never unloaded.
+
+`qwen3.8-27b` and `qwen3-coder-next` were added on 2026-11-24 as possible
+replacements for `qwen3-coder`. Benchmark all three on an idle box, record the
+numbers in `hosts/lab/vars.yml`, and remove whichever loses:
+
+```bash
+bash scripts/bench_swap.sh qwen3.8-27b
+bash scripts/bench_swap.sh qwen3-coder-next
+bash scripts/bench_swap.sh qwen3-coder
+```
+
+`qwen3-coder-next` is larger than the 36 GB of combined VRAM. llama.cpp's
+automatic fitting (`--fit`, on by default) places the overflow of expert
+weights in system RAM when the model loads. That needs roughly 15 GB of free
+RAM, so load it when no training run is holding memory. Set `n_cpu_moe` by
+hand only if a benchmark shows it beating `--fit`.
+
+All of these models reason before answering. A low `max_tokens` can be used up
+entirely by reasoning and return an empty `content`, which looks like a
+failure but is not. Set `max_tokens` generously.
+
+To see what is loaded right now, which does not load anything:
+
+```bash
+curl -s http://lab.local:8080/running
+```
+
 Inference and training do not share a scheduler. If a model already occupies
 VRAM, a training job can fail later with an out-of-memory error. Before a large
 training run, unload inference explicitly:
@@ -325,6 +369,47 @@ journalctl -u llama-swap -n 100
 journalctl -u lab-idle-shutdown -n 100
 ```
 
+Restarting llama-swap stops any model it has loaded. Check `/running` first:
+
+```bash
+sudo systemctl restart llama-swap
+```
+
+Mumble status, logs, and the clients connected right now:
+
+```bash
+systemctl status mumble-server
+journalctl -u mumble-server -n 100
+sudo ss -tn state established '( sport = :64738 )'
+```
+
+Restarting Mumble drops everyone who is connected:
+
+```bash
+sudo systemctl restart mumble-server
+```
+
+To require a server password, set `mumble_require_password: true` in
+`hosts/lab/vars.yml` and apply the `mumble` tag. A password is generated in
+`/etc/mumble/server_password` on the host, never in this repository.
+
+The admin account is `SuperUser`. Its password was generated at first start
+and written to the journal. It is only needed to create channels or set
+permissions. To change it, run this with nobody connected, then restart the
+server:
+
+```bash
+sudo -u mumble-server mumble-server -ini /etc/mumble/mumble-server.ini -supw '<new password>'
+```
+
+Backups run nightly at 23:00 (`lab-backup.timer`) and are checked weekly on
+Sundays at 22:00 (`lab-backup-check.timer`):
+
+```bash
+systemctl list-timers 'lab-backup*'
+journalctl -u lab-backup -n 50
+```
+
 To prevent tonight's automatic power-off:
 
 ```bash
@@ -333,7 +418,9 @@ sudo touch /run/lab-no-suspend
 
 The override disappears on the next boot. The machine checks hourly from
 midnight through 08:00 and powers off once it has been idle for the preceding
-hour. It stays off until someone presses the power button.
+hour. It stays off until someone presses the power button. Any of these keeps
+it up: recent CPU load, a CUDA process, Beekeeper training, recent llama-swap
+or bobgpt requests, an open login session, or a client connected to Mumble.
 
 ## Security and maintenance notes
 
@@ -347,6 +434,11 @@ hour. It stays off until someone presses the power button.
 - NVIDIA and Docker packages are held to prevent unattended version mismatches.
 - Automated package upgrades are masked and must be run deliberately.
 - Services use plain HTTP. This deployment assumes a trusted LAN.
+- Mumble has no server password. Anyone on the LAN can join.
+- `needrestart` is installed. An apt install that also upgrades a shared
+  library can make it restart most of the services on the box. Run
+  `apt-get -s install <package>` first to see what would be upgraded, and set
+  `NEEDRESTART_SUSPEND=1` on the Ansible apt task, as `roles/mumble` does.
 
 Be careful when changing the firewall, SSH configuration, sudoers files, LVM,
 or NVIDIA packages. Those are the changes most capable of making the machine
@@ -358,8 +450,10 @@ place.
 
 The important ones are:
 
-- There are no backups. Restic is installed but has no repository, credentials,
-  or timer. `/data` is on one NVMe with no redundancy.
+- `/data` is on one NVMe with no redundancy. Restic backs up `/data`, `/etc`,
+  and Beekeeper's projects nightly to a separate SATA disk in the same machine
+  (`/backups/local`). `/data/models` is excluded because the weights can be
+  downloaded again. Nothing is copied off the machine.
 - Container images and several tools use floating tags or branches, so this is
   configuration-reproducible rather than bit-for-bit reproducible.
 - Beekeeper keeps important state inside its Git checkout.
