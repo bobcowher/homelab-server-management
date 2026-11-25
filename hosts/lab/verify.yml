@@ -2689,14 +2689,16 @@
       no_log: true
       tags: [mumble]
 
-    # The password itself is never printed. An empty serverpassword would make
-    # the server open to anyone on the LAN.
-    - name: Mumble requires a password and keeps its database under /data
+    # Checked both ways: a password where none was meant locks everyone out,
+    # and none where one was meant opens the server. Never printed.
+    - name: Mumble's password matches the setting, and its database is under /data
       ansible.builtin.assert:
         that:
-          - (vrf_mumble_ini.content | b64decode) is search('(?m)^serverpassword=\\S+')
+          - ((vrf_mumble_ini.content | b64decode) is search('(?m)^serverpassword=\\S+')) == (mumble_require_password | bool)
           - (vrf_mumble_ini.content | b64decode) is search('(?m)^database=' ~ (mumble_data_dir | regex_escape) ~ '/')
-        fail_msg: "mumble-server.ini has no server password or a database outside {{ mumble_data_dir }}"
+        fail_msg: >-
+          mumble-server.ini does not match mumble_require_password={{ mumble_require_password }},
+          or its database is outside {{ mumble_data_dir }}
         quiet: true
       no_log: true
       tags: [mumble]

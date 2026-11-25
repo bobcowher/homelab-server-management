@@ -56,7 +56,7 @@ The useful endpoints are:
 | llama-swap API and UI | `http://lab.local:8080/` |
 | OpenAI-compatible API | `http://lab.local:8080/v1` |
 | Beekeeper | `http://lab.local:5000/` |
-| Mumble (voice) | `lab.local:64738`, password in `/etc/mumble/server_password` |
+| Mumble (voice) | `lab.local:64738`, no password (LAN only) |
 | SSH | `ssh robertcowher@lab.local` |
 
 Open WebUI and File Browser sit behind Caddy. Beekeeper is deliberately served

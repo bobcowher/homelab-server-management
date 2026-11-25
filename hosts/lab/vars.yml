@@ -563,6 +563,11 @@ mumble_port: 64738
 # restic backs it up.
 mumble_data_dir: "{{ data_root }}/mumble"
 
+# Off: the server is open to anyone on the LAN, which is the only place ufw
+# lets a client come from. Robert's call on 2026-11-24. Turning it on
+# generates /etc/mumble/server_password on the host, outside this public repo.
+mumble_require_password: false
+
 # Package defaults, stated so a change is a diff here rather than a surprise.
 # bandwidth is the per-client cap in bits/s; 558000 is the server default and
 # is far more than one voice stream needs.

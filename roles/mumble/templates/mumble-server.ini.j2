@@ -21,8 +21,9 @@ welcometext="<br />Welcome to the lab Mumble server.<br />"
 ; LAN reach is enforced by ufw (lan_subnet only), not by the bind.
 port={{ mumble_port }}
 
-; Required for every connection. Generated on the host; read it with
-;   sudo cat /etc/mumble/server_password
+; Empty means anyone who can reach the port may join; ufw limits that to the
+; LAN. When mumble_require_password is on it is generated on the host; read it
+; with  sudo cat /etc/mumble/server_password
 serverpassword={{ mumble_server_password }}
 
 bandwidth={{ mumble_bandwidth }}

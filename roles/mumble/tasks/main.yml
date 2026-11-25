@@ -31,25 +31,38 @@
     group: mumble-server
     mode: "0750"
 
-# Kept out of the repository, which is public. Same shape as the SonarQube
-# database password: umask before the redirect so the file is never briefly
-# world-readable, and `creates:` so a second apply does not roll the password
-# out from under every client that has saved it.
+# Only when mumble_require_password is on. Kept out of the repository, which
+# is public. Same shape as the SonarQube database password: umask before the
+# redirect so the file is never briefly world-readable, and `creates:` so a
+# second apply does not roll the password out from under every client that
+# has saved it.
 - name: Generate the server password if it does not exist
   ansible.builtin.shell:
     cmd: umask 077 && openssl rand -base64 12 > /etc/mumble/server_password
     creates: /etc/mumble/server_password
+  when: mumble_require_password | bool
 
 - name: Read the server password
   ansible.builtin.slurp:
     src: /etc/mumble/server_password
   register: mumble_server_password_raw
   no_log: true
+  when: mumble_require_password | bool
 
 - name: Record the server password
   ansible.builtin.set_fact:
-    mumble_server_password: "{{ mumble_server_password_raw.content | b64decode | trim }}"
+    mumble_server_password: >-
+      {{ (mumble_server_password_raw.content | b64decode | trim)
+         if mumble_require_password | bool else '' }}
   no_log: true
+
+# A leftover file would read as the password in force when none is. Turning
+# the setting back on generates a fresh one.
+- name: Remove the server password file when no password is required
+  ansible.builtin.file:
+    path: /etc/mumble/server_password
+    state: absent
+  when: not (mumble_require_password | bool)
 
 # Replaces the package's conffile outright. dpkg will ask about it on a future
 # package upgrade; that only happens on a deliberate apt run, since automated
