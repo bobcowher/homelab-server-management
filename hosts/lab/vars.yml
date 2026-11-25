@@ -199,6 +199,40 @@ llama_models:
     # the model's real chat template.
     args: "--jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0"
 
+  # Candidates to replace qwen3-coder, added 2026-11-24 ahead of a demo.
+  # NOT YET MEASURED -- benchmark both against qwen3-coder with
+  # scripts/bench_swap.sh on an idle box, record the numbers here, and drop
+  # whichever loses.
+
+  # Dense 27B (Aug 2026). Q6_K is 21GB, so it fits the 36GB pool with room for
+  # KV. Dense means every weight is read per token: expect it to generate
+  # slower than the 3B-active MoEs (one public 3090 run: ~41 tok/s at Q4).
+  - name: qwen3.8-27b
+    file: Qwen3.8-27B-UD-Q6_K.gguf
+    hf_repo: unsloth/Qwen3.8-27B-GGUF
+    gpus: all
+    ctx: 65536
+    threads: 16
+    args: "--jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0"
+
+  # 80B MoE, 3B active (Jan 2026), Qwen's coding-agent line. Q4_K_M is 48GB,
+  # which does NOT fit the 36GB pool, so some expert weights live in system
+  # RAM. That offload is left to --fit rather than set with n_cpu_moe: --fit
+  # adjusts every unset argument to the VRAM free at load time, which a fixed
+  # layer count cannot, and the policy above is that n_cpu_moe is measured,
+  # never guessed. If a hand-set n_cpu_moe beats --fit on this box, set it
+  # then, with the numbers.
+  #
+  # The CPU side needs ~15GB+ of free RAM on top of whatever is running. Load
+  # it when training is not holding system memory as well as the 3090.
+  - name: qwen3-coder-next
+    file: Qwen3-Coder-Next-Q4_K_M.gguf
+    hf_repo: unsloth/Qwen3-Coder-Next-GGUF
+    gpus: all
+    ctx: 65536
+    threads: 16
+    args: "--jinja -fa on --cache-type-k q8_0 --cache-type-v q8_0"
+
   # --- the resident lane ---------------------------------------------------
   # General-purpose family model. Pinned to the 3060 and never evicted, so the
   # 3090 stays free for training: `group: resident` puts it in a persistent
