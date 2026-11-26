@@ -37,6 +37,9 @@
     - "{{ data_root }}/models"
     - "{{ data_root }}/datasets"
     - "{{ data_root }}/beekeeper"
+    # Mirror of the desktop's ~/Music, pushed nightly by the desktop project's
+    # music-mirror timer so restic covers the library. Robert is in ml.
+    - "{{ data_root }}/music"
 
 # setgid above fixes the GROUP of new files. It does nothing about their MODE,
 # which comes from the writing process's umask -- so a service with

@@ -195,6 +195,7 @@
         - "{{ data_root }}/models"
         - "{{ data_root }}/datasets"
         - "{{ data_root }}/beekeeper"
+        - "{{ data_root }}/music"
       tags: [storage]
 
     - name: Data directories exist, are group ml, and are setgid
